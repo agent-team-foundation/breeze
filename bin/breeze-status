@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# breeze-status — reads inbox.json and outputs a one-line statusline summary
+# Used by Claude Code's statusline configuration
+set -euo pipefail
+
+BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
+INBOX="$BREEZE_DIR/inbox.json"
+
+# If no inbox file, show nothing
+if [ ! -f "$INBOX" ]; then
+  exit 0
+fi
+
+# Check staleness (>10 min = stale)
+if [ "$(uname)" = "Darwin" ]; then
+  FILE_AGE=$(( $(date +%s) - $(stat -f %m "$INBOX") ))
+else
+  FILE_AGE=$(( $(date +%s) - $(stat -c %Y "$INBOX") ))
+fi
+
+if [ "$FILE_AGE" -gt 600 ]; then
+  echo "breeze: stale (poller not running?)"
+  exit 0
+fi
+
+# Count notifications by type
+COUNTS=$(jq -r '
+  .notifications
+  | group_by(.type)
+  | map({type: .[0].type, count: length})
+  | sort_by(-.count)
+  | map(
+      if .type == "PullRequest" then "\(.count) PRs"
+      elif .type == "Issue" then "\(.count) issues"
+      elif .type == "Discussion" then "\(.count) discussions"
+      else "\(.count) \(.type)"
+      end
+    )
+  | join(" · ")
+' "$INBOX" 2>/dev/null)
+
+TOTAL=$(jq '.notifications | length' "$INBOX" 2>/dev/null)
+
+if [ "$TOTAL" = "0" ] || [ -z "$TOTAL" ]; then
+  exit 0
+fi
+
+echo "breeze: $COUNTS"

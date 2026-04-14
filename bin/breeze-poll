@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# breeze-poll — polls GitHub notifications and writes to ~/.breeze/inbox.json
+# Designed to run as a launchd plist (macOS) or crontab entry (Linux)
+set -euo pipefail
+
+BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
+INBOX="$BREEZE_DIR/inbox.json"
+INBOX_TMP="$BREEZE_DIR/inbox.json.tmp"
+CONFIG="$BREEZE_DIR/config.yaml"
+
+# Ensure breeze directory exists
+mkdir -p "$BREEZE_DIR"
+
+# Check gh auth
+if ! gh auth status &>/dev/null; then
+  echo "ERROR: gh is not authenticated. Run 'gh auth login' first." >&2
+  exit 1
+fi
+
+# Read config — if no config, watch all repos
+REPOS_FILTER=""
+if [ -f "$CONFIG" ]; then
+  # Simple yaml parsing for repos list
+  REPOS=$(grep -A 100 '^repos:' "$CONFIG" 2>/dev/null | grep '^\s*-' | sed 's/^\s*-\s*//' | head -50)
+  if [ -n "$REPOS" ] && [ "$REPOS" != "all" ]; then
+    REPOS_FILTER="$REPOS"
+  fi
+fi
+
+# Fetch notifications from GitHub API
+# Lightweight metadata only (two-tier enrichment: full context fetched on-demand by /breeze skill)
+RAW=$(gh api /notifications --paginate --jq '
+  [.[] | {
+    id: .id,
+    type: .subject.type,
+    reason: .reason,
+    repo: .repository.full_name,
+    title: .subject.title,
+    url: .subject.url,
+    last_actor: (.subject.latest_comment_url // .subject.url),
+    updated_at: .updated_at,
+    unread: .unread
+  }]
+' 2>/dev/null) || {
+  echo "WARN: GitHub API call failed, skipping this poll cycle." >&2
+  exit 0
+}
+
+# Filter by configured repos if specified
+if [ -n "$REPOS_FILTER" ]; then
+  FILTER_JQ=""
+  while IFS= read -r repo; do
+    [ -z "$repo" ] && continue
+    if [ -z "$FILTER_JQ" ]; then
+      FILTER_JQ=".repo == \"$repo\""
+    else
+      FILTER_JQ="$FILTER_JQ or .repo == \"$repo\""
+    fi
+  done <<< "$REPOS_FILTER"
+
+  if [ -n "$FILTER_JQ" ]; then
+    RAW=$(echo "$RAW" | jq "[.[] | select($FILTER_JQ)]")
+  fi
+fi
+
+# Add priority ordering and GitHub web URLs
+# Priority: 1=review_requested, 2=mention, 3=assign, 4=participating, 5=other
+ENRICHED=$(echo "$RAW" | jq '
+  [.[] | . + {
+    priority: (
+      if .reason == "review_requested" then 1
+      elif .reason == "mention" then 2
+      elif .reason == "assign" then 3
+      elif .reason == "participating" then 4
+      else 5
+      end
+    ),
+    number: (
+      if (.url | test("/pulls/|/issues/")) then
+        (.url | split("/") | last | tonumber) // null
+      else null end
+    ),
+    html_url: (
+      if .type == "PullRequest" then
+        "https://github.com/" + .repo + "/pull/" + ((.url | split("/") | last) // "")
+      elif .type == "Issue" then
+        "https://github.com/" + .repo + "/issues/" + ((.url | split("/") | last) // "")
+      else
+        "https://github.com/" + .repo
+      end
+    )
+  }] | sort_by(.priority, .updated_at) | reverse
+')
+
+# Build final inbox JSON with timestamp
+RESULT=$(jq -n \
+  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --argjson notifs "$ENRICHED" \
+  '{last_poll: $ts, notifications: $notifs}')
+
+# Atomic write: write to tmp, then mv (same filesystem = atomic)
+echo "$RESULT" > "$INBOX_TMP"
+mv "$INBOX_TMP" "$INBOX"
+
+COUNT=$(echo "$ENRICHED" | jq 'length')
+echo "breeze: polled $(date -u +%H:%M:%S) — $COUNT notifications"

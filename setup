@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# breeze setup — installs the poller, statusline hook, and skill symlink
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
+SKILL_DIR="$HOME/.claude/skills"
+
+echo "=== breeze setup ==="
+echo ""
+
+# 1. Check prerequisites
+echo "Checking prerequisites..."
+
+if ! command -v gh &>/dev/null; then
+  echo "ERROR: gh CLI is not installed. Install it: https://cli.github.com/"
+  exit 1
+fi
+
+if ! gh auth status &>/dev/null; then
+  echo "ERROR: gh is not authenticated. Run 'gh auth login' first."
+  exit 1
+fi
+
+if ! command -v jq &>/dev/null; then
+  echo "ERROR: jq is not installed. Install it: brew install jq (macOS) or apt install jq (Linux)"
+  exit 1
+fi
+
+echo "  gh CLI: OK"
+echo "  jq: OK"
+echo ""
+
+# 2. Create breeze directory and default config
+echo "Setting up ~/.breeze..."
+mkdir -p "$BREEZE_DIR"
+
+if [ ! -f "$BREEZE_DIR/config.yaml" ]; then
+  cat > "$BREEZE_DIR/config.yaml" << 'EOF'
+# breeze configuration
+# List specific repos to watch, or remove this section to watch all
+repos:
+  - all
+
+# Poll interval in seconds (used by launchd/crontab)
+poll_interval: 180
+
+# Append footer to comments/reviews posted by breeze
+footer: true
+
+# Automatically mark notifications as read after polling
+auto_mark_read: false
+
+# Priority ordering (highest first)
+priority:
+  - review_requested
+  - mention
+  - assign
+  - participating
+EOF
+  echo "  Created default config at $BREEZE_DIR/config.yaml"
+else
+  echo "  Config already exists at $BREEZE_DIR/config.yaml"
+fi
+echo ""
+
+# 3. Make scripts executable
+echo "Making scripts executable..."
+chmod +x "$SCRIPT_DIR/bin/breeze-poll"
+chmod +x "$SCRIPT_DIR/bin/breeze-status"
+echo "  OK"
+echo ""
+
+# 4. Install skill symlink
+echo "Installing Claude Code skill..."
+mkdir -p "$SKILL_DIR"
+if [ -L "$SKILL_DIR/breeze" ] || [ -d "$SKILL_DIR/breeze" ]; then
+  rm -rf "$SKILL_DIR/breeze"
+fi
+ln -s "$SCRIPT_DIR/skill" "$SKILL_DIR/breeze"
+echo "  Symlinked $SKILL_DIR/breeze -> $SCRIPT_DIR/skill"
+echo ""
+
+# 5. Install poller (platform-specific)
+echo "Installing poller..."
+
+if [ "$(uname)" = "Darwin" ]; then
+  # macOS: launchd plist
+  PLIST_DIR="$HOME/Library/LaunchAgents"
+  PLIST_FILE="$PLIST_DIR/com.breeze.poll.plist"
+  mkdir -p "$PLIST_DIR"
+
+  # Unload existing if present
+  launchctl unload "$PLIST_FILE" 2>/dev/null || true
+
+  cat > "$PLIST_FILE" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.breeze.poll</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$SCRIPT_DIR/bin/breeze-poll</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>180</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$BREEZE_DIR/poll.log</string>
+  <key>StandardErrorPath</key>
+  <string>$BREEZE_DIR/poll-error.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
+EOF
+
+  launchctl load "$PLIST_FILE"
+  echo "  Installed launchd plist at $PLIST_FILE"
+  echo "  Poller runs every 3 minutes, survives session end"
+
+else
+  # Linux: crontab
+  CRON_CMD="*/3 * * * * /bin/bash $SCRIPT_DIR/bin/breeze-poll >> $BREEZE_DIR/poll.log 2>&1"
+  (crontab -l 2>/dev/null | grep -v breeze-poll; echo "$CRON_CMD") | crontab -
+  echo "  Installed crontab entry (every 3 minutes)"
+fi
+echo ""
+
+# 6. Run initial poll
+echo "Running initial poll..."
+bash "$SCRIPT_DIR/bin/breeze-poll"
+echo ""
+
+# 7. Show status
+echo "=== Setup complete ==="
+echo ""
+echo "  Inbox:     $BREEZE_DIR/inbox.json"
+echo "  Config:    $BREEZE_DIR/config.yaml"
+echo "  Skill:     $SKILL_DIR/breeze"
+echo "  Logs:      $BREEZE_DIR/poll.log"
+echo ""
+echo "Usage:"
+echo "  /breeze          — open your notification inbox in Claude Code"
+echo "  breeze-status    — one-line summary (for statusline)"
+echo ""
+echo "To add statusline integration, add to ~/.claude/settings.json:"
+echo '  "statusline": "'$SCRIPT_DIR'/bin/breeze-status"'
+echo ""
+echo "To stop the poller:"
+if [ "$(uname)" = "Darwin" ]; then
+  echo "  launchctl unload ~/Library/LaunchAgents/com.breeze.poll.plist"
+else
+  echo "  crontab -e  (remove the breeze-poll line)"
+fi
