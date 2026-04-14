@@ -30,7 +30,7 @@ fi
 # Fetch notifications from GitHub API
 # Lightweight metadata only (two-tier enrichment: full context fetched on-demand by /breeze skill)
 RAW=$(gh api /notifications --paginate --jq '
-  [.[] | {
+  .[] | {
     id: .id,
     type: .subject.type,
     reason: .reason,
@@ -40,8 +40,8 @@ RAW=$(gh api /notifications --paginate --jq '
     last_actor: (.subject.latest_comment_url // .subject.url),
     updated_at: .updated_at,
     unread: .unread
-  }]
-' 2>/dev/null) || {
+  }
+' 2>/dev/null | jq -s '.') || {
   echo "WARN: GitHub API call failed, skipping this poll cycle." >&2
   exit 0
 }
@@ -92,14 +92,11 @@ ENRICHED=$(echo "$RAW" | jq '
   }] | sort_by(.priority, .updated_at) | reverse
 ')
 
-# Build final inbox JSON with timestamp
-RESULT=$(jq -n \
-  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --argjson notifs "$ENRICHED" \
-  '{last_poll: $ts, notifications: $notifs}')
+# Build final inbox JSON with timestamp (pipe to avoid ARG_MAX on large payloads)
+echo "$ENRICHED" | jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{last_poll: $ts, notifications: .}' > "$INBOX_TMP"
 
 # Atomic write: write to tmp, then mv (same filesystem = atomic)
-echo "$RESULT" > "$INBOX_TMP"
 mv "$INBOX_TMP" "$INBOX"
 
 COUNT=$(echo "$ENRICHED" | jq 'length')

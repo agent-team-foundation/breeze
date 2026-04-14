@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # breeze-status — reads inbox.json and outputs a one-line statusline summary
-# Used by Claude Code's statusline configuration
+# Designed to work alongside other statusline commands (chain with &&)
+# Shows unread count prominently, read count in parentheses
 set -euo pipefail
 
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
 INBOX="$BREEZE_DIR/inbox.json"
+SEEN_FILE="$BREEZE_DIR/seen.json"
+
+# Pass through stdin (Claude Code sends session JSON) so chained commands can use it
+INPUT=$(cat)
 
 # If no inbox file, show nothing
 if [ ! -f "$INBOX" ]; then
@@ -23,26 +28,44 @@ if [ "$FILE_AGE" -gt 600 ]; then
   exit 0
 fi
 
-# Count notifications by type
-COUNTS=$(jq -r '
-  .notifications
-  | group_by(.type)
-  | map({type: .[0].type, count: length})
-  | sort_by(-.count)
-  | map(
-      if .type == "PullRequest" then "\(.count) PRs"
-      elif .type == "Issue" then "\(.count) issues"
-      elif .type == "Discussion" then "\(.count) discussions"
-      else "\(.count) \(.type)"
-      end
-    )
-  | join(" · ")
-' "$INBOX" 2>/dev/null)
-
-TOTAL=$(jq '.notifications | length' "$INBOX" 2>/dev/null)
-
-if [ "$TOTAL" = "0" ] || [ -z "$TOTAL" ]; then
-  exit 0
+# Load seen notification IDs
+SEEN_IDS="[]"
+if [ -f "$SEEN_FILE" ]; then
+  SEEN_IDS=$(jq '.seen_ids // []' "$SEEN_FILE" 2>/dev/null || echo "[]")
 fi
 
-echo "breeze: $COUNTS"
+# Count unread (not in seen list) vs read (in seen list) by type
+SUMMARY=$(jq -r --argjson seen "$SEEN_IDS" '
+  .notifications
+  | map(. + {is_seen: (.id | IN($seen[]))})
+  | {
+      unread: [.[] | select(.is_seen | not)],
+      read: [.[] | select(.is_seen)]
+    }
+  | {
+      unread_count: (.unread | length),
+      read_count: (.read | length),
+      unread_by_type: (
+        .unread | group_by(.type)
+        | map({type: .[0].type, count: length})
+        | sort_by(-.count)
+        | map(
+            if .type == "PullRequest" then "\(.count) PRs"
+            elif .type == "Issue" then "\(.count) issues"
+            elif .type == "Discussion" then "\(.count) discussions"
+            else "\(.count) \(.type)"
+            end
+          )
+        | join(" · ")
+      )
+    }
+  | if .unread_count == 0 and .read_count == 0 then ""
+    elif .unread_count == 0 then "breeze: all read (\(.read_count))"
+    elif .read_count == 0 then "breeze: \(.unread_by_type)"
+    else "breeze: \(.unread_by_type) (+\(.read_count) read)"
+    end
+' "$INBOX" 2>/dev/null)
+
+if [ -n "$SUMMARY" ]; then
+  echo "$SUMMARY"
+fi

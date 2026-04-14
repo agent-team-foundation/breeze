@@ -134,25 +134,74 @@ else
 fi
 echo ""
 
-# 6. Run initial poll
+# 6. Initialize seen.json for read/unread tracking
+if [ ! -f "$BREEZE_DIR/seen.json" ]; then
+  echo '{"seen_ids":[],"seen_at":{}}' > "$BREEZE_DIR/seen.json"
+  echo "  Created seen tracker at $BREEZE_DIR/seen.json"
+fi
+echo ""
+
+# 7. Install statusline
+echo "Installing statusline..."
+SETTINGS_FILE="$HOME/.claude/settings.json"
+BREEZE_STATUS_CMD="$SCRIPT_DIR/bin/breeze-status"
+
+if [ -f "$SETTINGS_FILE" ]; then
+  CURRENT_CMD=$(jq -r '.statusLine.command // empty' "$SETTINGS_FILE" 2>/dev/null)
+  if [ -n "$CURRENT_CMD" ]; then
+    if echo "$CURRENT_CMD" | grep -q "breeze-status"; then
+      echo "  Statusline already includes breeze"
+    else
+      # Chain breeze output as an additional line after the existing statusline
+      # Use a wrapper that runs both and combines output
+      WRAPPER="$SCRIPT_DIR/bin/breeze-statusline-wrapper"
+      cat > "$WRAPPER" << WEOF
+#!/usr/bin/env bash
+# Runs existing statusline command, then appends breeze status
+INPUT=\$(cat)
+EXISTING=\$(echo "\$INPUT" | $CURRENT_CMD 2>/dev/null || true)
+BREEZE=\$(echo "\$INPUT" | $BREEZE_STATUS_CMD 2>/dev/null || true)
+[ -n "\$EXISTING" ] && echo "\$EXISTING"
+[ -n "\$BREEZE" ] && echo "\$BREEZE"
+WEOF
+      chmod +x "$WRAPPER"
+
+      # Update settings.json
+      TMP_SETTINGS=$(mktemp)
+      jq --arg cmd "$WRAPPER" '.statusLine.command = $cmd' "$SETTINGS_FILE" > "$TMP_SETTINGS"
+      mv "$TMP_SETTINGS" "$SETTINGS_FILE"
+      echo "  Chained breeze into existing statusline"
+      echo "  Previous: $CURRENT_CMD"
+      echo "  Wrapper:  $WRAPPER"
+    fi
+  else
+    # No existing statusline, install breeze directly
+    TMP_SETTINGS=$(mktemp)
+    jq --arg cmd "$BREEZE_STATUS_CMD" '.statusLine = {"type":"command","command":$cmd}' "$SETTINGS_FILE" > "$TMP_SETTINGS"
+    mv "$TMP_SETTINGS" "$SETTINGS_FILE"
+    echo "  Installed breeze as statusline command"
+  fi
+else
+  echo "  WARN: ~/.claude/settings.json not found. Add statusline manually."
+fi
+echo ""
+
+# 8. Run initial poll
 echo "Running initial poll..."
 bash "$SCRIPT_DIR/bin/breeze-poll"
 echo ""
 
-# 7. Show status
+# 9. Show status
 echo "=== Setup complete ==="
 echo ""
 echo "  Inbox:     $BREEZE_DIR/inbox.json"
 echo "  Config:    $BREEZE_DIR/config.yaml"
+echo "  Seen:      $BREEZE_DIR/seen.json"
 echo "  Skill:     $SKILL_DIR/breeze"
 echo "  Logs:      $BREEZE_DIR/poll.log"
 echo ""
 echo "Usage:"
 echo "  /breeze          — open your notification inbox in Claude Code"
-echo "  breeze-status    — one-line summary (for statusline)"
-echo ""
-echo "To add statusline integration, add to ~/.claude/settings.json:"
-echo '  "statusline": "'$SCRIPT_DIR'/bin/breeze-status"'
 echo ""
 echo "To stop the poller:"
 if [ "$(uname)" = "Darwin" ]; then
