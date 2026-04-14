@@ -1,35 +1,45 @@
 #!/usr/bin/env bash
 # breeze-poll — polls GitHub notifications and writes to ~/.breeze/inbox.json
-# Designed to run as a launchd plist (macOS) or crontab entry (Linux)
 set -euo pipefail
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/bin:$PATH"
 
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
 INBOX="$BREEZE_DIR/inbox.json"
 INBOX_TMP="$BREEZE_DIR/inbox.json.tmp"
+RAW_TMP="$BREEZE_DIR/.raw_notifications.json"
 CONFIG="$BREEZE_DIR/config.yaml"
 
-# Ensure breeze directory exists
 mkdir -p "$BREEZE_DIR"
 
-# Check gh auth
+# Check gh
+if ! command -v gh &>/dev/null; then
+  echo "ERROR: gh not found" >&2
+  exit 1
+fi
 if ! gh auth status &>/dev/null; then
-  echo "ERROR: gh is not authenticated. Run 'gh auth login' first." >&2
+  echo "ERROR: gh not authenticated" >&2
   exit 1
 fi
 
-# Read config — if no config, watch all repos
+# Read config — extract repos list only (stop at next top-level key)
 REPOS_FILTER=""
 if [ -f "$CONFIG" ]; then
-  # Simple yaml parsing for repos list
-  REPOS=$(grep -A 100 '^repos:' "$CONFIG" 2>/dev/null | grep '^\s*-' | sed 's/^\s*-\s*//' | head -50)
+  REPOS=$(awk '/^repos:/{found=1; next} found && /^[a-z]/{exit} found && /^\s*-/{gsub(/^\s*-\s*/, ""); print}' "$CONFIG" | head -50)
   if [ -n "$REPOS" ] && [ "$REPOS" != "all" ]; then
     REPOS_FILTER="$REPOS"
   fi
 fi
 
-# Fetch notifications from GitHub API
-# Lightweight metadata only (two-tier enrichment: full context fetched on-demand by /breeze skill)
-RAW=$(gh api /notifications --paginate --jq '
+# Step 1: Fetch raw notifications to a temp file (avoids shell quoting issues)
+gh api /notifications --paginate > "$RAW_TMP" 2>/dev/null || {
+  echo "WARN: GitHub API failed, skipping" >&2
+  rm -f "$RAW_TMP"
+  exit 0
+}
+
+# Step 2: Transform with jq (reading from file, not shell variable)
+jq '[
   .[] | {
     id: .id,
     type: .subject.type,
@@ -39,14 +49,37 @@ RAW=$(gh api /notifications --paginate --jq '
     url: .subject.url,
     last_actor: (.subject.latest_comment_url // .subject.url),
     updated_at: .updated_at,
-    unread: .unread
+    unread: .unread,
+    priority: (
+      if .reason == "review_requested" then 1
+      elif .reason == "mention" then 2
+      elif .reason == "assign" then 3
+      elif .reason == "participating" then 4
+      else 5
+      end
+    ),
+    number: (
+      if (.subject.url | tostring | test("/pulls/|/issues/")) then
+        (.subject.url | tostring | split("/") | last | tonumber) // null
+      else null end
+    ),
+    html_url: (
+      if .subject.type == "PullRequest" then
+        "https://github.com/" + .repository.full_name + "/pull/" + ((.subject.url | tostring | split("/") | last) // "")
+      elif .subject.type == "Issue" then
+        "https://github.com/" + .repository.full_name + "/issues/" + ((.subject.url | tostring | split("/") | last) // "")
+      else
+        "https://github.com/" + .repository.full_name
+      end
+    )
   }
-' 2>/dev/null | jq -s '.') || {
-  echo "WARN: GitHub API call failed, skipping this poll cycle." >&2
+] | sort_by(.priority, .updated_at) | reverse' "$RAW_TMP" > "$BREEZE_DIR/.enriched.json" 2>/dev/null || {
+  echo "WARN: jq transform failed" >&2
+  rm -f "$RAW_TMP"
   exit 0
 }
 
-# Filter by configured repos if specified
+# Step 3: Filter by repos if configured
 if [ -n "$REPOS_FILTER" ]; then
   FILTER_JQ=""
   while IFS= read -r repo; do
@@ -59,45 +92,17 @@ if [ -n "$REPOS_FILTER" ]; then
   done <<< "$REPOS_FILTER"
 
   if [ -n "$FILTER_JQ" ]; then
-    RAW=$(echo "$RAW" | jq "[.[] | select($FILTER_JQ)]")
+    jq "[.[] | select($FILTER_JQ)]" "$BREEZE_DIR/.enriched.json" > "$BREEZE_DIR/.filtered.json"
+    mv "$BREEZE_DIR/.filtered.json" "$BREEZE_DIR/.enriched.json"
   fi
 fi
 
-# Add priority ordering and GitHub web URLs
-# Priority: 1=review_requested, 2=mention, 3=assign, 4=participating, 5=other
-ENRICHED=$(echo "$RAW" | jq '
-  [.[] | . + {
-    priority: (
-      if .reason == "review_requested" then 1
-      elif .reason == "mention" then 2
-      elif .reason == "assign" then 3
-      elif .reason == "participating" then 4
-      else 5
-      end
-    ),
-    number: (
-      if (.url | test("/pulls/|/issues/")) then
-        (.url | split("/") | last | tonumber) // null
-      else null end
-    ),
-    html_url: (
-      if .type == "PullRequest" then
-        "https://github.com/" + .repo + "/pull/" + ((.url | split("/") | last) // "")
-      elif .type == "Issue" then
-        "https://github.com/" + .repo + "/issues/" + ((.url | split("/") | last) // "")
-      else
-        "https://github.com/" + .repo
-      end
-    )
-  }] | sort_by(.priority, .updated_at) | reverse
-')
+# Step 4: Build final inbox JSON
+jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{last_poll: $ts, notifications: .}' "$BREEZE_DIR/.enriched.json" > "$INBOX_TMP"
 
-# Build final inbox JSON with timestamp (pipe to avoid ARG_MAX on large payloads)
-echo "$ENRICHED" | jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '{last_poll: $ts, notifications: .}' > "$INBOX_TMP"
-
-# Atomic write: write to tmp, then mv (same filesystem = atomic)
 mv "$INBOX_TMP" "$INBOX"
+rm -f "$RAW_TMP" "$BREEZE_DIR/.enriched.json"
 
-COUNT=$(echo "$ENRICHED" | jq 'length')
+COUNT=$(jq '.notifications | length' "$INBOX")
 echo "breeze: polled $(date -u +%H:%M:%S) — $COUNT notifications"

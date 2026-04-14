@@ -134,14 +134,7 @@ else
 fi
 echo ""
 
-# 6. Initialize seen.json for read/unread tracking
-if [ ! -f "$BREEZE_DIR/seen.json" ]; then
-  echo '{"seen_ids":[],"seen_at":{}}' > "$BREEZE_DIR/seen.json"
-  echo "  Created seen tracker at $BREEZE_DIR/seen.json"
-fi
-echo ""
-
-# 7. Install statusline
+# 6. Install statusline
 echo "Installing statusline..."
 SETTINGS_FILE="$HOME/.claude/settings.json"
 BREEZE_STATUS_CMD="$SCRIPT_DIR/bin/breeze-status"
@@ -186,17 +179,16 @@ else
 fi
 echo ""
 
-# 8. Run initial poll
+# 7. Run initial poll
 echo "Running initial poll..."
 bash "$SCRIPT_DIR/bin/breeze-poll"
 echo ""
 
-# 9. Show status
+# 8. Show status
 echo "=== Setup complete ==="
 echo ""
 echo "  Inbox:     $BREEZE_DIR/inbox.json"
 echo "  Config:    $BREEZE_DIR/config.yaml"
-echo "  Seen:      $BREEZE_DIR/seen.json"
 echo "  Skill:     $SKILL_DIR/breeze"
 echo "  Logs:      $BREEZE_DIR/poll.log"
 echo ""
