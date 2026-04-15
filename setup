@@ -161,7 +161,7 @@ WEOF
 
       # Update settings.json
       TMP_SETTINGS=$(mktemp)
-      jq --arg cmd "$WRAPPER" '.statusLine.command = $cmd | .statusLine.refreshInterval = 60' "$SETTINGS_FILE" > "$TMP_SETTINGS"
+      jq --arg cmd "$WRAPPER" '.statusLine.command = $cmd | .statusLine.refreshInterval = 15' "$SETTINGS_FILE" > "$TMP_SETTINGS"
       mv "$TMP_SETTINGS" "$SETTINGS_FILE"
       echo "  Chained breeze into existing statusline"
       echo "  Previous: $CURRENT_CMD"
