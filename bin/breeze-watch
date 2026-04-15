@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# breeze-watch — streaming activity log with clickable GitHub links
+# Launched by /breeze-watch skill, runs in a separate terminal window
+set -euo pipefail
+
+BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
+LOG_FILE="$BREEZE_DIR/activity.log"
+STATUS_FILE="$BREEZE_DIR/status.json"
+INBOX="$BREEZE_DIR/inbox.json"
+
+mkdir -p "$BREEZE_DIR"
+touch "$LOG_FILE"
+
+# OSC 8 clickable link helper
+# Usage: link "https://github.com/..." "display text"
+link() {
+  printf '\033]8;;%s\033\\%s\033]8;;\033\\' "$1" "$2"
+}
+
+# Format a single JSONL log line
+format_line() {
+  local LINE="$1"
+  local TS=$(echo "$LINE" | jq -r '.ts // ""' 2>/dev/null)
+  local EVENT=$(echo "$LINE" | jq -r '.event // ""' 2>/dev/null)
+  local TITLE=$(echo "$LINE" | jq -r '.title // ""' 2>/dev/null)
+  local REPO=$(echo "$LINE" | jq -r '.repo // ""' 2>/dev/null)
+  local TYPE=$(echo "$LINE" | jq -r '.type // ""' 2>/dev/null)
+  local URL=$(echo "$LINE" | jq -r '.url // ""' 2>/dev/null)
+  local ACTION=$(echo "$LINE" | jq -r '.action // ""' 2>/dev/null)
+  local REASON=$(echo "$LINE" | jq -r '.reason // ""' 2>/dev/null)
+  local BY=$(echo "$LINE" | jq -r '.by // ""' 2>/dev/null)
+  local FROM=$(echo "$LINE" | jq -r '.from // ""' 2>/dev/null)
+  local TRIGGER=$(echo "$LINE" | jq -r '.trigger // ""' 2>/dev/null)
+  local CMD=$(echo "$LINE" | jq -r '.command // ""' 2>/dev/null)
+  local COUNT=$(echo "$LINE" | jq -r '.count // ""' 2>/dev/null)
+
+  # Format timestamp (show time only)
+  local TIME=""
+  if [ -n "$TS" ]; then
+    TIME=$(echo "$TS" | sed 's/.*T//' | sed 's/Z$//' | cut -c1-8)
+  fi
+
+  # Format by event type
+  case "$EVENT" in
+    new)
+      printf "\033[90m[%s]\033[0m \033[32m→ new\033[0m       [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
+      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      ;;
+    claimed)
+      printf "\033[90m[%s]\033[0m \033[33m⚡ claimed\033[0m   [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
+      [ -n "$BY" ] && printf "                     by %s\n" "$BY"
+      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      ;;
+    action)
+      printf "\033[90m[%s]\033[0m \033[36m⚙ action\033[0m    %s\n" "$TIME" "$ACTION"
+      [ -n "$CMD" ] && printf "                     \033[90m$ %s\033[0m\n" "$CMD"
+      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      ;;
+    resolved)
+      printf "\033[90m[%s]\033[0m \033[32m✓ resolved\033[0m  [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
+      [ -n "$REASON" ] && printf "                     %s\n" "$REASON"
+      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      ;;
+    pending)
+      printf "\033[90m[%s]\033[0m \033[33m⏳ pending\033[0m  [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
+      [ -n "$REASON" ] && printf "                     %s\n" "$REASON"
+      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      ;;
+    snoozed)
+      local UNTIL=$(echo "$LINE" | jq -r '.snooze_until // ""' 2>/dev/null)
+      printf "\033[90m[%s]\033[0m \033[35m⏸ snoozed\033[0m   [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
+      [ -n "$UNTIL" ] && printf "                     until %s\n" "$UNTIL"
+      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      ;;
+    reopened)
+      printf "\033[90m[%s]\033[0m \033[31m↺ reopened\033[0m  [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
+      [ -n "$TRIGGER" ] && printf "                     %s (was %s)\n" "$TRIGGER" "$FROM"
+      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      ;;
+    poll)
+      printf "\033[90m[%s]\033[0m \033[90m↻ polled\033[0m    %s notifications\n" "$TIME" "$COUNT"
+      ;;
+    *)
+      printf "\033[90m[%s]\033[0m %s %s\n" "$TIME" "$EVENT" "$TITLE"
+      ;;
+  esac
+}
+
+# Print header
+print_header() {
+  clear
+  echo ""
+  printf "  \033[1m/breeze-watch\033[0m — live activity log\n"
+  echo ""
+
+  # Show status summary if available
+  if [ -f "$INBOX" ] && [ -f "$STATUS_FILE" ]; then
+    local TOTAL=$(jq '.notifications | length' "$INBOX" 2>/dev/null || echo "0")
+    local NON_OPEN=$(jq 'to_entries | map(select(.value.status != "open")) | length' "$STATUS_FILE" 2>/dev/null || echo "0")
+    local OPEN=$((TOTAL - NON_OPEN))
+    local CLAIMED=$(jq '[to_entries[] | select(.value.status == "claimed")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
+    local PENDING=$(jq '[to_entries[] | select(.value.status == "pending")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
+    local SNOOZED=$(jq '[to_entries[] | select(.value.status == "snoozed")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
+    local RESOLVED=$(jq '[to_entries[] | select(.value.status == "resolved")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
+    printf "  \033[1m%s open\033[0m · %s claimed · %s pending · %s snoozed · %s resolved\n" "$OPEN" "$CLAIMED" "$PENDING" "$SNOOZED" "$RESOLVED"
+  fi
+
+  echo ""
+  printf "  \033[90m────────────────────────────────────────────────────\033[0m\n"
+  echo ""
+}
+
+# Main
+print_header
+
+# Show last 50 lines of history
+if [ -s "$LOG_FILE" ]; then
+  tail -50 "$LOG_FILE" | while IFS= read -r line; do
+    [ -n "$line" ] && format_line "$line"
+  done
+  echo ""
+  printf "  \033[90m──── live ────────────────────────────────────────\033[0m\n"
+  echo ""
+fi
+
+# Stream new events
+tail -f "$LOG_FILE" 2>/dev/null | while IFS= read -r line; do
+  [ -n "$line" ] && format_line "$line"
+done

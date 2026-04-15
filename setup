@@ -79,6 +79,11 @@ if [ -L "$SKILL_DIR/breeze" ] || [ -d "$SKILL_DIR/breeze" ]; then
 fi
 ln -s "$SCRIPT_DIR/skill" "$SKILL_DIR/breeze"
 echo "  Symlinked $SKILL_DIR/breeze -> $SCRIPT_DIR/skill"
+if [ -L "$SKILL_DIR/breeze-watch" ] || [ -d "$SKILL_DIR/breeze-watch" ]; then
+  rm -rf "$SKILL_DIR/breeze-watch"
+fi
+ln -s "$SCRIPT_DIR/skill-watch" "$SKILL_DIR/breeze-watch"
+echo "  Symlinked $SKILL_DIR/breeze-watch -> $SCRIPT_DIR/skill-watch"
 echo ""
 
 # 5. Install poller (platform-specific)
