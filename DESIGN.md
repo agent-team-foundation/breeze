@@ -102,20 +102,28 @@ User types /breeze
 
 **1. Poller (background loop)**
 - Implementation: a shell script installed as a system-level launchd plist (macOS) or crontab entry (Linux). This ensures the poller survives Claude Code session end. Claude Code `/loop` is session-scoped and would die when the user closes the terminal, so it is NOT suitable as the primary mechanism. The setup script creates and loads the launchd/crontab entry automatically
-- Runs `gh api /notifications` with appropriate filters
+- Runs `gh api /notifications?all=true` to fetch all notifications (breeze manages its own status, GitHub's read/unread is ignored)
+- Polls every 60 seconds (uses ~60 API requests/hour, well within GitHub's 5,000/hour limit)
+- Filters out CheckSuite and Commit notification types (noise)
+- Deduplicates paginated results via `unique_by(.id)`
+- Pidfile lock prevents concurrent poller instances (setup + launchd can race)
+- Runs state machine transitions after each poll (reopens resolved/pending/snoozed on new activity)
 - **Two-tier enrichment:** at poll time, fetches only lightweight metadata (notification id, type, repo, title, last actor, timestamp, reason). Full enrichment (PR diff, comment thread, issue body) happens on-demand when the user selects a notification in `/breeze`
 - Writes structured JSON to `~/.breeze/inbox.json` using atomic writes (write to `~/.breeze/inbox.json.tmp` in the same directory, then `mv` to `inbox.json`) to prevent corruption from concurrent reads. Both files must be on the same filesystem for `mv` atomicity
 - Priority ordering: review requests > mentions > assigned > participating > everything else
 - Optionally marks notifications as read on GitHub after processing (default: off, per config `auto_mark_read: false`)
 
 **2. Statusline Hook**
-- Registers via Claude Code's statusline configuration (a shell command in `~/.claude/settings.json` under the `statusline` key that runs on an interval and displays output). If statusline integration is not available in the user's Claude Code version, the `/breeze` skill itself prints the notification count as a header when invoked
-- Reads `~/.breeze/inbox.json` and outputs a one-line summary
-- Displays: `breeze: 3 PRs . 1 issue . 2 mentions`
-- Shows nothing if inbox is empty or file doesn't exist
+- Registers via Claude Code's `statusLine` config in `~/.claude/settings.json` with `refreshInterval: 1` (re-reads local file every second, no API calls)
+- Setup script auto-chains breeze into existing statusline via a wrapper script (doesn't replace)
+- Reads `~/.breeze/inbox.json` + `~/.breeze/status.json` and counts only **open** notifications
+- Displays: `/breeze: 52 PRs · 3 issues · 1 discussions`
+- Shows `(+N new)` suffix and rings terminal bell when new notifications arrive
+- Shows nothing if inbox is empty, shows "stale" warning if inbox.json is >10 min old
 
 **3. `/breeze` Skill**
-- Reads inbox.json, renders numbered list with one-line summaries
+- Reads inbox.json + status.json, shows dashboard grouped by project (repo)
+- Only shows open notifications by default, with status summary at top
 - User picks a number or describes what they want to see
 - Skill loads full context via `gh` CLI (PR diff, full comment thread, related code)
 - Agent summarizes the situation and suggests an action
@@ -134,7 +142,7 @@ repos:
   - owner/repo1
   - owner/repo2
   # or "all" to watch everything
-poll_interval: 180  # seconds
+poll_interval: 60   # seconds
 footer: true
 auto_mark_read: false
 priority:
