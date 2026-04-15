@@ -161,7 +161,7 @@ WEOF
 
       # Update settings.json
       TMP_SETTINGS=$(mktemp)
-      jq --arg cmd "$WRAPPER" '.statusLine.command = $cmd' "$SETTINGS_FILE" > "$TMP_SETTINGS"
+      jq --arg cmd "$WRAPPER" '.statusLine.command = $cmd | .statusLine.refreshInterval = 60' "$SETTINGS_FILE" > "$TMP_SETTINGS"
       mv "$TMP_SETTINGS" "$SETTINGS_FILE"
       echo "  Chained breeze into existing statusline"
       echo "  Previous: $CURRENT_CMD"
@@ -170,7 +170,7 @@ WEOF
   else
     # No existing statusline, install breeze directly
     TMP_SETTINGS=$(mktemp)
-    jq --arg cmd "$BREEZE_STATUS_CMD" '.statusLine = {"type":"command","command":$cmd}' "$SETTINGS_FILE" > "$TMP_SETTINGS"
+    jq --arg cmd "$BREEZE_STATUS_CMD" '.statusLine = {"type":"command","command":$cmd,"refreshInterval":60}' "$SETTINGS_FILE" > "$TMP_SETTINGS"
     mv "$TMP_SETTINGS" "$SETTINGS_FILE"
     echo "  Installed breeze as statusline command"
   fi
