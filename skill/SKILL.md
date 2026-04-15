@@ -72,7 +72,9 @@ BREEZE_POLL=$(find ~/.claude/skills -name breeze-poll -type f 2>/dev/null | head
 
 ## Show Inbox Dashboard
 
-Present a dashboard grouped by project (repo), showing only OPEN notifications:
+Present a dashboard grouped by project (repo), showing only OPEN notifications.
+
+First, fetch the raw data:
 
 ```bash
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
@@ -86,39 +88,68 @@ jq -r --slurpfile status "$STATUS_FILE" '
       repo: .[0].repo,
       items: [.[] | {id: .id, type: .type, title: .title, reason: .reason, number: .number, html_url: .html_url, updated_at: .updated_at}]
     })
-  | sort_by(-.items | length)
+  | sort_by(-((.items | length)))
   | .[]
-  | "\n## \(.repo) (\(.items | length))\n" +
-    ([.items | to_entries[] |
-      "  \(.key + 1). [\(.value.type)] \(.value.title) (\(.value.reason))\n     \(.value.html_url)"
-    ] | join("\n"))
+  | "\(.repo)\t\(.items | length)\t" +
+    ([.items[] |
+      "\(.type)\t\(.title)\t\(.reason)\t\(.html_url)\t\(.number)"
+    ] | join("|||"))
 ' "$BREEZE_DIR/inbox.json" 2>/dev/null
 ```
 
-Present the dashboard like this:
+Then present the dashboard using **aggressive markdown formatting** for readability:
 
+### Formatting rules
+
+1. **Status bar** at the top with emoji markers:
+   ```
+   **breeze** | :red_circle: 15 open · :hourglass: 3 pending · :zzz: 1 snoozed · :white_check_mark: 166 resolved
+   ```
+
+2. **Group by repo** using `###` headers. Use **short repo names** (drop the owner prefix unless ambiguous).
+
+3. **Use a compact table** per repo for items. Columns: `#`, type icon, title (as clickable link), reason tag.
+   - Type icons: PR = `^` (merge arrow), Issue = `!`, Discussion = `?`
+   - Reason tags: `review_requested` → **review**, `author` → _yours_, `mention` → @you, `comment` → msg, `participating` → joined, `subscribed` → watching
+
+4. **Collapse low-priority items**: If a repo has >10 items, show the top 5 (by priority: review_requested > mention > author > comment > others) and add a "... and N more" line. The user can say "show all paperclip" to expand.
+
+5. **Keep it tight**: No blank lines between table rows. No full URLs on separate lines — make the title itself the link using `[title](url)` markdown.
+
+Example output:
+
+```markdown
+**breeze** | :red_circle: 15 open · :hourglass: 3 pending · :zzz: 1 snoozed · :white_check_mark: 50 resolved
+
+### paperclip (10)
+
+| # | | Title | Why |
+|---|---|-------|-----|
+| 1 | ^ | [Fix stale execution lock cleanup](https://github.com/paperclipai/paperclip/pull/3694) | msg |
+| 2 | ^ | [fix: preserve managed Codex auth](https://github.com/paperclipai/paperclip/pull/3681) | msg |
+| 3 | ! | [x-data-loader: SocialData API exhausted](https://github.com/paperclipai/paperclip/issues/3701) | msg |
+| 4 | ^ | [feat(i18n): multilingual framework](https://github.com/paperclipai/paperclip/pull/3672) | msg |
+| 5 | ! | [Orphaned runs block agent queue](https://github.com/paperclipai/paperclip/issues/3168) | msg |
+| | | *... and 5 more* | |
+
+### paperclip-tree (12)
+
+| # | | Title | Why |
+|---|---|-------|-----|
+| 1 | ^ | [sync: Add standalone MCP server](https://github.com/serenakeyitan/paperclip-tree/pull/266) | _yours_ |
+| 2 | ^ | [sync: polish inbox workflows](https://github.com/serenakeyitan/paperclip-tree/pull/259) | _yours_ |
+| 3 | ^ | [sync: adapter capability flags](https://github.com/serenakeyitan/paperclip-tree/pull/295) | _yours_ |
+| | | *... and 9 more* | |
+
+### first-tree-context (2)
+
+| # | | Title | Why |
+|---|---|-------|-----|
+| 1 | ^ | [meeting sync: 2026-04-14](https://github.com/agent-team-foundation/first-tree-context/pull/131) | @you |
+| 2 | ^ | [marketing: launch strategy](https://github.com/agent-team-foundation/first-tree-context/pull/73) | @you |
 ```
-/breeze inbox — 15 open · 3 claimed · 5 pending · 1 snoozed
 
-## serenakeyitan/paperclip-tree (10)
-  1. [PR] feat: add OAuth support (review_requested)
-     https://github.com/serenakeyitan/paperclip-tree/pull/305
-  2. [PR] fix: remove hardcoded JWT secret (author)
-     https://github.com/serenakeyitan/paperclip-tree/pull/227
-  ...
-
-## agent-team-foundation/first-tree (3)
-  1. [Issue] bug: extractOwnersFromCodeowners (mention)
-     https://github.com/agent-team-foundation/first-tree/issues/90
-  2. [PR] sync: update NODE.md schema (author)
-     https://github.com/agent-team-foundation/first-tree/pull/85
-
-## paperclipai/paperclip (2)
-  1. [Issue] feature request: dark mode (participating)
-     https://github.com/paperclipai/paperclip/issues/3100
-```
-
-After showing the dashboard, ask: "Pick a number from any project to dive in, or tell me what you want to do (e.g. 'show pending', 'resolve all paperclip-tree PRs', 'snooze #3 for 2 days')."
+After showing the dashboard, ask: "Pick a number from any project to dive in, or tell me what you want to do (e.g. 'show all paperclip', 'resolve paperclip-tree sync PRs', 'snooze #3 for 2 days')."
 
 ## Status Commands
 

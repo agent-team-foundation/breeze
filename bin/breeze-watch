@@ -11,10 +11,42 @@ INBOX="$BREEZE_DIR/inbox.json"
 mkdir -p "$BREEZE_DIR"
 touch "$LOG_FILE"
 
+# Rainbow color palette (ANSI 256-color)
+# Cycles through: red, orange, yellow, green, cyan, blue, purple
+RAINBOW=(
+  '\033[38;5;196m'  # red
+  '\033[38;5;208m'  # orange
+  '\033[38;5;220m'  # yellow
+  '\033[38;5;46m'   # green
+  '\033[38;5;51m'   # cyan
+  '\033[38;5;33m'   # blue
+  '\033[38;5;129m'  # purple
+)
+RESET='\033[0m'
+DIM='\033[90m'
+BOLD='\033[1m'
+LINE_COUNT=0
+
+# Get next rainbow color
+rainbow() {
+  local idx=$((LINE_COUNT % ${#RAINBOW[@]}))
+  printf '%b' "${RAINBOW[$idx]}"
+}
+
 # OSC 8 clickable link helper
-# Usage: link "https://github.com/..." "display text"
 link() {
   printf '\033]8;;%s\033\\%s\033]8;;\033\\' "$1" "$2"
+}
+
+# Truncate title to fit terminal width
+truncate_title() {
+  local title="$1"
+  local max="${2:-60}"
+  if [ ${#title} -gt "$max" ]; then
+    echo "${title:0:$((max-1))}…"
+  else
+    echo "$title"
+  fi
 }
 
 # Format a single JSONL log line
@@ -40,57 +72,79 @@ format_line() {
     TIME=$(echo "$TS" | sed 's/.*T//' | sed 's/Z$//' | cut -c1-8)
   fi
 
-  # Format by event type
+  # Short repo name (drop owner prefix)
+  local SHORT_REPO="$REPO"
+  if [[ "$REPO" == */* ]]; then
+    SHORT_REPO="${REPO#*/}"
+  fi
+
+  # Truncate title
+  TITLE=$(truncate_title "$TITLE" 55)
+
+  # Get rainbow color for this line
+  local CLR
+  CLR=$(rainbow)
+
+  # Format by event type with rainbow colors
   case "$EVENT" in
     new)
-      printf "\033[90m[%s]\033[0m \033[32m→ new\033[0m       [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
-      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      printf "${DIM}%s${RESET}  ${CLR}▸ NEW${RESET}       ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
+      LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     claimed)
-      printf "\033[90m[%s]\033[0m \033[33m⚡ claimed\033[0m   [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
-      [ -n "$BY" ] && printf "                     by %s\n" "$BY"
-      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      printf "${DIM}%s${RESET}  ${CLR}⚡ CLAIM${RESET}     ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      [ -n "$BY" ] && printf "              ${DIM}↳ by %s${RESET}\n" "$BY"
+      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
+      LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     action)
-      printf "\033[90m[%s]\033[0m \033[36m⚙ action\033[0m    %s\n" "$TIME" "$ACTION"
-      [ -n "$CMD" ] && printf "                     \033[90m$ %s\033[0m\n" "$CMD"
-      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      printf "${DIM}%s${RESET}  ${CLR}⚙ ACTION${RESET}    %s\n" "$TIME" "$ACTION"
+      [ -n "$CMD" ] && printf "              ${DIM}\$ %s${RESET}\n" "$CMD"
+      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
+      LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     resolved)
-      printf "\033[90m[%s]\033[0m \033[32m✓ resolved\033[0m  [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
-      [ -n "$REASON" ] && printf "                     %s\n" "$REASON"
-      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      printf "${DIM}%s${RESET}  ${CLR}✓ DONE${RESET}      ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      [ -n "$REASON" ] && printf "              ${DIM}↳ %s${RESET}\n" "$REASON"
+      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
+      LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     pending)
-      printf "\033[90m[%s]\033[0m \033[33m⏳ pending\033[0m  [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
-      [ -n "$REASON" ] && printf "                     %s\n" "$REASON"
-      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      printf "${DIM}%s${RESET}  ${CLR}⏳ WAIT${RESET}     ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      [ -n "$REASON" ] && printf "              ${DIM}↳ %s${RESET}\n" "$REASON"
+      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
+      LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     snoozed)
       local UNTIL=$(echo "$LINE" | jq -r '.snooze_until // ""' 2>/dev/null)
-      printf "\033[90m[%s]\033[0m \033[35m⏸ snoozed\033[0m   [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
-      [ -n "$UNTIL" ] && printf "                     until %s\n" "$UNTIL"
-      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      printf "${DIM}%s${RESET}  ${CLR}⏸ SNOOZE${RESET}    ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      [ -n "$UNTIL" ] && printf "              ${DIM}↳ until %s${RESET}\n" "$UNTIL"
+      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
+      LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     reopened)
-      printf "\033[90m[%s]\033[0m \033[31m↺ reopened\033[0m  [%s] %s — %s\n" "$TIME" "$TYPE" "$REPO" "$TITLE"
-      [ -n "$TRIGGER" ] && printf "                     %s (was %s)\n" "$TRIGGER" "$FROM"
-      [ -n "$URL" ] && printf "                     %s\n" "$(link "$URL" "$URL")"
+      printf "${DIM}%s${RESET}  ${CLR}↺ REOPEN${RESET}    ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      [ -n "$TRIGGER" ] && printf "              ${DIM}↳ %s (was %s)${RESET}\n" "$TRIGGER" "$FROM"
+      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
+      LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     poll)
-      printf "\033[90m[%s]\033[0m \033[90m↻ polled\033[0m    %s notifications\n" "$TIME" "$COUNT"
+      # Only show poll if it has new notifications (quiet otherwise)
+      printf "${DIM}%s  ↻ %s notifications${RESET}\n" "$TIME" "$COUNT"
       ;;
     *)
-      printf "\033[90m[%s]\033[0m %s %s\n" "$TIME" "$EVENT" "$TITLE"
+      printf "${DIM}%s${RESET}  ${CLR}●${RESET} %s  %s\n" "$TIME" "$EVENT" "$TITLE"
+      LINE_COUNT=$((LINE_COUNT + 1))
       ;;
   esac
 }
 
-# Print header
+# Print header with rainbow banner
 print_header() {
   clear
   echo ""
-  printf "  \033[1m/breeze-watch\033[0m — live activity log\n"
+  printf "  ${RAINBOW[0]}b${RAINBOW[1]}r${RAINBOW[2]}e${RAINBOW[3]}e${RAINBOW[4]}z${RAINBOW[5]}e${RAINBOW[6]}—${RAINBOW[0]}w${RAINBOW[1]}a${RAINBOW[2]}t${RAINBOW[3]}c${RAINBOW[4]}h${RESET}  ${DIM}live activity log${RESET}\n"
   echo ""
 
   # Show status summary if available
@@ -102,24 +156,28 @@ print_header() {
     local PENDING=$(jq '[to_entries[] | select(.value.status == "pending")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
     local SNOOZED=$(jq '[to_entries[] | select(.value.status == "snoozed")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
     local RESOLVED=$(jq '[to_entries[] | select(.value.status == "resolved")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
-    printf "  \033[1m%s open\033[0m · %s claimed · %s pending · %s snoozed · %s resolved\n" "$OPEN" "$CLAIMED" "$PENDING" "$SNOOZED" "$RESOLVED"
+    printf "  ${RAINBOW[0]}●${RESET} ${BOLD}%s open${RESET}  " "$OPEN"
+    printf "${RAINBOW[2]}●${RESET} %s claimed  " "$CLAIMED"
+    printf "${RAINBOW[3]}●${RESET} %s pending  " "$PENDING"
+    printf "${RAINBOW[6]}●${RESET} %s snoozed  " "$SNOOZED"
+    printf "${RAINBOW[4]}●${RESET} %s resolved\n" "$RESOLVED"
   fi
 
   echo ""
-  printf "  \033[90m────────────────────────────────────────────────────\033[0m\n"
+  printf "  ${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RESET}\n"
   echo ""
 }
 
 # Main
 print_header
 
-# Show last 50 lines of history
+# Show last 30 lines of history (reduced from 50 for cleaner start)
 if [ -s "$LOG_FILE" ]; then
-  tail -50 "$LOG_FILE" | while IFS= read -r line; do
+  tail -30 "$LOG_FILE" | while IFS= read -r line; do
     [ -n "$line" ] && format_line "$line"
   done
   echo ""
-  printf "  \033[90m──── live ────────────────────────────────────────\033[0m\n"
+  printf "  ${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RESET} ${DIM}live${RESET} ${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RESET}\n"
   echo ""
 fi
 

@@ -1,5 +1,5 @@
 ---
-name: breeze-update
+name: breeze-upgrade
 description: |
   Update breeze to the latest version. Pulls from main (or latest release
   tag when available). Re-runs setup if needed.
@@ -8,7 +8,7 @@ allowed-tools:
   - Bash
 ---
 
-# breeze-update
+# breeze-upgrade
 
 Update breeze to the latest version.
 

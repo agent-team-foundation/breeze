@@ -137,8 +137,10 @@ if [ -n "$NEW_NOTIFS" ]; then
   done <<< "$NEW_NOTIFS"
 fi
 
-# Log poll event
-echo "{\"ts\":\"$POLL_TS\",\"event\":\"poll\",\"count\":$(jq '.notifications | length' "$INBOX")}" >> "$LOG_FILE"
+# Log poll event only when there are new notifications (avoid noise in breeze-watch)
+if [ -n "$NEW_NOTIFS" ]; then
+  echo "{\"ts\":\"$POLL_TS\",\"event\":\"poll\",\"count\":$(jq '.notifications | length' "$INBOX")}" >> "$LOG_FILE"
+fi
 
 rm -f "$RAW_TMP" "$BREEZE_DIR/.enriched.json"
 
