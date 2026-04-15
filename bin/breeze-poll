@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# breeze-poll — polls GitHub notifications and writes to ~/.breeze/inbox.json
+# breeze-poll — polls GitHub notifications and enriches with labels via GraphQL
+# Writes to ~/.breeze/inbox.json with breeze_status field per notification
 set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/bin:$PATH"
@@ -109,7 +110,102 @@ if [ -n "$REPOS_FILTER" ]; then
   fi
 fi
 
-# Step 4: Detect new notifications (diff old vs new inbox)
+# Step 4: GraphQL label + state enrichment
+# Build a batched GraphQL query per repo to fetch labels and state for all PRs/issues
+LABEL_MAP="$BREEZE_DIR/.label_map.json"
+echo '{}' > "$LABEL_MAP"
+
+# Extract unique (repo, number, type) tuples for items that can have labels
+ITEMS=$(jq -r '.[] | select(.number != null and (.type == "PullRequest" or .type == "Issue")) | "\(.repo)\t\(.number)\t\(.type)"' "$BREEZE_DIR/.enriched.json" 2>/dev/null)
+
+if [ -n "$ITEMS" ]; then
+  # Group by repo
+  REPOS=$(echo "$ITEMS" | cut -f1 | sort -u)
+
+  while IFS= read -r REPO; do
+    [ -z "$REPO" ] && continue
+    OWNER="${REPO%%/*}"
+    NAME="${REPO#*/}"
+
+    # Build field-aliased query fragments for this repo (max ~30 per query to stay within complexity limits)
+    REPO_ITEMS=$(echo "$ITEMS" | awk -F'\t' -v repo="$REPO" '$1 == repo {print $2"\t"$3}')
+    QUERY_FRAGMENTS=""
+    BATCH=0
+
+    while IFS=$'\t' read -r NUM TYPE; do
+      [ -z "$NUM" ] && continue
+      ALIAS="n${NUM}"
+      if [ "$TYPE" = "PullRequest" ]; then
+        QUERY_FRAGMENTS="${QUERY_FRAGMENTS} ${ALIAS}: pullRequest(number: ${NUM}) { number state labels(first: 10) { nodes { name } } }"
+      else
+        QUERY_FRAGMENTS="${QUERY_FRAGMENTS} ${ALIAS}: issue(number: ${NUM}) { number state labels(first: 10) { nodes { name } } }"
+      fi
+      BATCH=$((BATCH + 1))
+
+      # Execute query when batch reaches 30 items or end
+      if [ $BATCH -ge 30 ]; then
+        QUERY="query { repository(owner: \"${OWNER}\", name: \"${NAME}\") { ${QUERY_FRAGMENTS} } }"
+        RESULT=$(gh api graphql -f query="$QUERY" 2>/dev/null || echo '{"data":{"repository":{}}}')
+
+        # Parse results into label map
+        echo "$RESULT" | jq --arg repo "$REPO" '
+          .data.repository // {} | to_entries[] |
+          {key: ($repo + "/" + (.value.number | tostring)),
+           value: {gh_state: .value.state, labels: [.value.labels.nodes[]?.name]}}
+        ' 2>/dev/null | jq -s 'from_entries' > "$BREEZE_DIR/.batch_labels.json" 2>/dev/null || true
+
+        # Merge into label map
+        if [ -s "$BREEZE_DIR/.batch_labels.json" ]; then
+          jq -s '.[0] * .[1]' "$LABEL_MAP" "$BREEZE_DIR/.batch_labels.json" > "$BREEZE_DIR/.merged_labels.json"
+          mv "$BREEZE_DIR/.merged_labels.json" "$LABEL_MAP"
+        fi
+
+        QUERY_FRAGMENTS=""
+        BATCH=0
+      fi
+    done <<< "$REPO_ITEMS"
+
+    # Execute remaining fragments
+    if [ $BATCH -gt 0 ]; then
+      QUERY="query { repository(owner: \"${OWNER}\", name: \"${NAME}\") { ${QUERY_FRAGMENTS} } }"
+      RESULT=$(gh api graphql -f query="$QUERY" 2>/dev/null || echo '{"data":{"repository":{}}}')
+
+      echo "$RESULT" | jq --arg repo "$REPO" '
+        .data.repository // {} | to_entries[] |
+        {key: ($repo + "/" + (.value.number | tostring)),
+         value: {gh_state: .value.state, labels: [.value.labels.nodes[]?.name]}}
+      ' 2>/dev/null | jq -s 'from_entries' > "$BREEZE_DIR/.batch_labels.json" 2>/dev/null || true
+
+      if [ -s "$BREEZE_DIR/.batch_labels.json" ]; then
+        jq -s '.[0] * .[1]' "$LABEL_MAP" "$BREEZE_DIR/.batch_labels.json" > "$BREEZE_DIR/.merged_labels.json"
+        mv "$BREEZE_DIR/.merged_labels.json" "$LABEL_MAP"
+      fi
+    fi
+  done <<< "$REPOS"
+fi
+
+# Step 5: Merge labels + compute breeze_status into enriched notifications
+jq --slurpfile labels "$LABEL_MAP" '
+  [.[] |
+    . as $n |
+    ($labels[0][($n.repo + "/" + ($n.number | tostring))] // {}) as $info |
+    $n + {
+      gh_state: ($info.gh_state // null),
+      labels: ($info.labels // []),
+      breeze_status: (
+        if ($info.labels // [] | map(select(. == "breeze:done")) | length > 0) then "done"
+        elif ($info.gh_state == "MERGED" or $info.gh_state == "CLOSED") then "done"
+        elif ($info.labels // [] | map(select(. == "breeze:human")) | length > 0) then "human"
+        elif ($info.labels // [] | map(select(. == "breeze:wip")) | length > 0) then "wip"
+        else "new"
+        end
+      )
+    }
+  ]
+' "$BREEZE_DIR/.enriched.json" > "$BREEZE_DIR/.enriched_final.json"
+mv "$BREEZE_DIR/.enriched_final.json" "$BREEZE_DIR/.enriched.json"
+
+# Step 6: Detect new notifications (diff old vs new inbox)
 LOG_FILE="$BREEZE_DIR/activity.log"
 OLD_IDS=""
 if [ -f "$INBOX" ]; then
@@ -120,7 +216,26 @@ NEW_IDS=$(jq -r '.[].id' "$BREEZE_DIR/.enriched.json" 2>/dev/null | sort)
 # Find IDs in new but not in old
 NEW_NOTIFS=$(comm -13 <(echo "$OLD_IDS") <(echo "$NEW_IDS") 2>/dev/null || true)
 
-# Step 5: Build final inbox JSON
+# Detect status changes (compare old vs new breeze_status)
+if [ -f "$INBOX" ]; then
+  OLD_STATUSES=$(jq -r '.notifications[] | "\(.id)\t\(.breeze_status // "new")"' "$INBOX" 2>/dev/null || true)
+  NEW_STATUSES=$(jq -r '.[] | "\(.id)\t\(.breeze_status // "new")"' "$BREEZE_DIR/.enriched.json" 2>/dev/null || true)
+
+  # Find changed statuses
+  while IFS=$'\t' read -r NID NEW_ST; do
+    [ -z "$NID" ] && continue
+    OLD_ST=$(echo "$OLD_STATUSES" | awk -F'\t' -v id="$NID" '$1 == id {print $2; exit}')
+    if [ -n "$OLD_ST" ] && [ "$OLD_ST" != "$NEW_ST" ]; then
+      # Log the status change
+      META=$(jq -c --arg id "$NID" '.[] | select(.id == $id) | {type: .type, repo: .repo, title: .title, url: .html_url}' "$BREEZE_DIR/.enriched.json" 2>/dev/null || echo '{}')
+      NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      echo "$META" | jq -c --arg ts "$NOW_TS" --arg event "$NEW_ST" --arg from "$OLD_ST" \
+        '. + {ts: $ts, event: $event, from: $from}' >> "$LOG_FILE" 2>/dev/null || true
+    fi
+  done <<< "$NEW_STATUSES"
+fi
+
+# Step 7: Build final inbox JSON
 POLL_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 jq --arg ts "$POLL_TS" \
   '{last_poll: $ts, notifications: .}' "$BREEZE_DIR/.enriched.json" > "$INBOX_TMP"
@@ -142,15 +257,25 @@ if [ -n "$NEW_NOTIFS" ]; then
   echo "{\"ts\":\"$POLL_TS\",\"event\":\"poll\",\"count\":$(jq '.notifications | length' "$INBOX")}" >> "$LOG_FILE"
 fi
 
-rm -f "$RAW_TMP" "$BREEZE_DIR/.enriched.json"
+rm -f "$RAW_TMP" "$BREEZE_DIR/.enriched.json" "$LABEL_MAP" "$BREEZE_DIR/.batch_labels.json"
 
-# Step 6: Run state machine transitions (reopen resolved/pending/snoozed on new activity)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -x "$SCRIPT_DIR/breeze-status-manager" ]; then
-  "$SCRIPT_DIR/breeze-status-manager" transitions 2>/dev/null || true
-  "$SCRIPT_DIR/breeze-status-manager" reconcile 2>/dev/null || true
-  "$SCRIPT_DIR/breeze-status-manager" gc 2>/dev/null || true
+# Step 8: Clean up expired claims
+CLAIMS_DIR="$BREEZE_DIR/claims"
+CLAIM_TIMEOUT=300
+if [ -d "$CLAIMS_DIR" ]; then
+  for claim_dir in "$CLAIMS_DIR"/*/; do
+    [ -d "$claim_dir" ] || continue
+    if [ -f "$claim_dir/claimed_at" ]; then
+      CLAIMED_AT=$(cat "$claim_dir/claimed_at")
+      CLAIMED_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$CLAIMED_AT" +%s 2>/dev/null || date -d "$CLAIMED_AT" +%s 2>/dev/null || echo "0")
+      NOW=$(date +%s)
+      if [ $(( NOW - CLAIMED_TS )) -ge $CLAIM_TIMEOUT ]; then
+        rm -rf "$claim_dir"
+      fi
+    fi
+  done
 fi
 
 COUNT=$(jq '.notifications | length' "$INBOX")
-echo "breeze: polled $(date -u +%H:%M:%S) — $COUNT notifications"
+NEW_COUNT=$(jq '[.notifications[] | select(.breeze_status == "new")] | length' "$INBOX")
+echo "breeze: polled $(date -u +%H:%M:%S) — $COUNT notifications ($NEW_COUNT new)"

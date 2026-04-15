@@ -1,21 +1,29 @@
 #!/usr/bin/env bash
-# breeze-status-manager — manages the 5-state notification status system
-# States: open (default), claimed, pending, snoozed, resolved
+# breeze-status-manager — manages notification status via GitHub labels
+# States: new (default), wip, human, done
+#
+# Labels on GitHub:
+#   breeze:new    — explicitly marked as new (optional, absence = new)
+#   breeze:wip    — work in progress
+#   breeze:human  — needs human attention
+#   breeze:done   — handled
+#
+# Status is detected from labels + PR/issue state (merged/closed = done).
+# Non-labelers get new/done automatically.
 #
 # Usage:
 #   breeze-status-manager get <notification-id>       → prints current status
-#   breeze-status-manager set <notification-id> <status> [--by <session-id>] [--reason <text>] [--snooze-until <iso-ts>]
+#   breeze-status-manager set <notification-id> <status> [--by <session-id>] [--reason <text>]
 #   breeze-status-manager claim <notification-id> <session-id> [--action <text>]
 #   breeze-status-manager release <notification-id>
 #   breeze-status-manager list [--status <status>]    → prints notification IDs with given status
 #   breeze-status-manager count [--status <status>]   → prints count
-#   breeze-status-manager transitions                 → run state machine (called by poller)
-#   breeze-status-manager gc                          → garbage collect old resolved entries
+#   breeze-status-manager ensure-labels <repo>        → creates breeze:* labels on a repo
 set -euo pipefail
 
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/bin:$PATH"
+
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
-STATUS_FILE="$BREEZE_DIR/status.json"
-STATUS_TMP="$BREEZE_DIR/status.json.tmp"
 CLAIMS_DIR="$BREEZE_DIR/claims"
 INBOX="$BREEZE_DIR/inbox.json"
 CLAIM_TIMEOUT=300  # 5 minutes in seconds
@@ -24,13 +32,10 @@ LOG_FILE="$BREEZE_DIR/activity.log"
 
 mkdir -p "$BREEZE_DIR" "$CLAIMS_DIR"
 
-# Initialize status.json if missing
-if [ ! -f "$STATUS_FILE" ]; then
-  echo '{}' > "$STATUS_FILE"
-fi
+# All breeze labels
+BREEZE_LABELS="breeze:new,breeze:wip,breeze:human,breeze:done"
 
 # Log an event to activity.log (JSONL, append-only)
-# Usage: log_event '{"event":"resolved","id":"123",...}'
 log_event() {
   echo "$1" >> "$LOG_FILE"
 }
@@ -38,7 +43,13 @@ log_event() {
 # Get notification metadata from inbox for logging
 notif_meta() {
   local ID="$1"
-  jq -r --arg id "$ID" '.notifications[] | select(.id == $id) | "\(.type)\t\(.repo)\t\(.title)\t\(.html_url)"' "$INBOX" 2>/dev/null || echo "unknown\tunknown\tunknown\t"
+  jq -r --arg id "$ID" '.notifications[] | select(.id == $id) | "\(.type)\t\(.repo)\t\(.title)\t\(.html_url)\t\(.number // "")"' "$INBOX" 2>/dev/null || echo "unknown\tunknown\tunknown\t\t"
+}
+
+# Get repo and number for a notification ID
+notif_repo_number() {
+  local ID="$1"
+  jq -r --arg id "$ID" '.notifications[] | select(.id == $id) | "\(.repo)\t\(.number // "")"' "$INBOX" 2>/dev/null || echo "\t"
 }
 
 CMD="${1:-help}"
@@ -53,13 +64,13 @@ case "$CMD" in
       CLAIMED_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$CLAIMED_AT" +%s 2>/dev/null || date -d "$CLAIMED_AT" +%s 2>/dev/null || echo "0")
       NOW=$(date +%s)
       if [ $(( NOW - CLAIMED_TS )) -lt $CLAIM_TIMEOUT ]; then
-        echo "claimed"
+        echo "wip (claimed)"
         exit 0
       fi
     fi
-    # Check status.json
-    STATUS=$(jq -r --arg id "$NOTIF_ID" '.[$id].status // "open"' "$STATUS_FILE" 2>/dev/null)
-    echo "$STATUS"
+    # Read breeze_status from inbox.json
+    STATUS=$(jq -r --arg id "$NOTIF_ID" '.notifications[] | select(.id == $id) | .breeze_status // "new"' "$INBOX" 2>/dev/null)
+    echo "${STATUS:-new}"
     ;;
 
   set)
@@ -67,33 +78,73 @@ case "$CMD" in
     NEW_STATUS="$1"; shift
     SESSION_ID=""
     REASON=""
-    SNOOZE_UNTIL="null"
     while [ $# -gt 0 ]; do
       case "$1" in
         --by) SESSION_ID="$2"; shift 2 ;;
         --reason) REASON="$2"; shift 2 ;;
-        --snooze-until) SNOOZE_UNTIL="\"$2\""; shift 2 ;;
         *) shift ;;
       esac
     done
-    # Get current github_updated_at from inbox
-    GH_UPDATED=$(jq -r --arg id "$NOTIF_ID" '.notifications[] | select(.id == $id) | .updated_at // ""' "$INBOX" 2>/dev/null || echo "")
-    NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    jq --arg id "$NOTIF_ID" \
-       --arg status "$NEW_STATUS" \
-       --arg changed_at "$NOW" \
-       --arg changed_by "$SESSION_ID" \
-       --arg reason "$REASON" \
-       --argjson snooze_until "$SNOOZE_UNTIL" \
-       --arg gh_updated "$GH_UPDATED" \
-       '.[$id] = {status: $status, changed_at: $changed_at, changed_by: $changed_by, reason: $reason, snooze_until: $snooze_until, github_updated_at: $gh_updated}' \
-       "$STATUS_FILE" > "$STATUS_TMP" && mv "$STATUS_TMP" "$STATUS_FILE"
-    # Clean up claim if resolving/pending/snoozed
-    if [ "$NEW_STATUS" != "claimed" ]; then
+
+    # Get repo and number for this notification
+    IFS=$'\t' read -r REPO NUMBER <<< "$(notif_repo_number "$NOTIF_ID")"
+
+    if [ -z "$REPO" ] || [ -z "$NUMBER" ]; then
+      echo "ERROR: cannot find repo/number for notification $NOTIF_ID" >&2
+      exit 1
+    fi
+
+    # Determine label to add
+    case "$NEW_STATUS" in
+      new)
+        # Remove all breeze labels (no label = new)
+        gh issue edit "$NUMBER" --repo "$REPO" --remove-label "$BREEZE_LABELS" 2>/dev/null || true
+        ;;
+      wip)
+        gh issue edit "$NUMBER" --repo "$REPO" --remove-label "$BREEZE_LABELS" 2>/dev/null || true
+        gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:wip" 2>/dev/null || {
+          # Label might not exist yet, create it
+          gh label create "breeze:wip" --repo "$REPO" --color "e4e669" --description "Breeze: work in progress" --force 2>/dev/null || true
+          gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:wip" 2>/dev/null || true
+        }
+        ;;
+      human)
+        gh issue edit "$NUMBER" --repo "$REPO" --remove-label "$BREEZE_LABELS" 2>/dev/null || true
+        gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:human" 2>/dev/null || {
+          gh label create "breeze:human" --repo "$REPO" --color "d93f0b" --description "Breeze: needs human attention" --force 2>/dev/null || true
+          gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:human" 2>/dev/null || true
+        }
+        ;;
+      done)
+        gh issue edit "$NUMBER" --repo "$REPO" --remove-label "$BREEZE_LABELS" 2>/dev/null || true
+        gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:done" 2>/dev/null || {
+          gh label create "breeze:done" --repo "$REPO" --color "0e8a16" --description "Breeze: handled" --force 2>/dev/null || true
+          gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:done" 2>/dev/null || true
+        }
+        ;;
+      *)
+        echo "ERROR: unknown status '$NEW_STATUS'. Use: new, wip, human, done" >&2
+        exit 1
+        ;;
+    esac
+
+    # Clean up claim if not wip
+    if [ "$NEW_STATUS" != "wip" ]; then
       rm -rf "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null || true
     fi
+
+    # Update breeze_status in inbox.json locally (will be confirmed on next poll)
+    if [ -f "$INBOX" ]; then
+      jq --arg id "$NOTIF_ID" --arg status "$NEW_STATUS" '
+        .notifications = [.notifications[] |
+          if .id == $id then .breeze_status = $status else . end
+        ]
+      ' "$INBOX" > "$BREEZE_DIR/inbox.json.tmp" && mv "$BREEZE_DIR/inbox.json.tmp" "$INBOX"
+    fi
+
     # Log the status change
-    IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL <<< "$(notif_meta "$NOTIF_ID")"
+    NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL _ <<< "$(notif_meta "$NOTIF_ID")"
     log_event "$(jq -nc \
       --arg ts "$NOW" \
       --arg event "$NEW_STATUS" \
@@ -119,7 +170,7 @@ case "$CMD" in
       echo "$NOW_TS" > "$CLAIMS_DIR/$NOTIF_ID/claimed_at"
       echo "$ACTION" > "$CLAIMS_DIR/$NOTIF_ID/action"
       # Log the claim
-      IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL <<< "$(notif_meta "$NOTIF_ID")"
+      IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL _ <<< "$(notif_meta "$NOTIF_ID")"
       log_event "$(jq -nc \
         --arg ts "$NOW_TS" --arg event "claimed" --arg id "$NOTIF_ID" \
         --arg type "$N_TYPE" --arg repo "$N_REPO" --arg title "$N_TITLE" \
@@ -159,226 +210,47 @@ case "$CMD" in
     ;;
 
   list)
-    FILTER_STATUS="open"
+    FILTER_STATUS="new"
     while [ $# -gt 0 ]; do
       case "$1" in
         --status) FILTER_STATUS="$2"; shift 2 ;;
         *) shift ;;
       esac
     done
-    if [ "$FILTER_STATUS" = "open" ]; then
-      # Open = in inbox but NOT in status.json (or status is "open")
-      # Also exclude active claims
-      ACTIVE_CLAIMS=$(ls "$CLAIMS_DIR" 2>/dev/null | tr '\n' '|' | sed 's/|$//')
-      jq -r --arg active "$ACTIVE_CLAIMS" '
-        . as $status |
-        input | .notifications[] |
-        select(
-          ($status[.id].status // "open") == "open"
-          and (if $active == "" then true else (.id | test($active) | not) end)
-        ) | .id
-      ' "$STATUS_FILE" "$INBOX" 2>/dev/null || true
-    else
-      jq -r --arg s "$FILTER_STATUS" 'to_entries[] | select(.value.status == $s) | .key' "$STATUS_FILE" 2>/dev/null
-    fi
+    jq -r --arg s "$FILTER_STATUS" '.notifications[] | select(.breeze_status == $s) | .id' "$INBOX" 2>/dev/null || true
     ;;
 
   count)
-    FILTER_STATUS="open"
+    FILTER_STATUS="new"
     while [ $# -gt 0 ]; do
       case "$1" in
         --status) FILTER_STATUS="$2"; shift 2 ;;
         *) shift ;;
       esac
     done
-    if [ "$FILTER_STATUS" = "open" ]; then
-      # Count: total in inbox minus (claimed + pending + snoozed + resolved)
-      TOTAL=$(jq '.notifications | length' "$INBOX" 2>/dev/null || echo "0")
-      NON_OPEN=$(jq '[to_entries[] | select(.value.status != "open")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
-      # Count active claims not already in status.json
-      ACTIVE_CLAIM_COUNT=0
-      for claim_dir in "$CLAIMS_DIR"/*/; do
-        [ -d "$claim_dir" ] || continue
-        CLAIM_ID=$(basename "$claim_dir")
-        if [ -f "$claim_dir/claimed_at" ]; then
-          CLAIMED_AT=$(cat "$claim_dir/claimed_at")
-          CLAIMED_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$CLAIMED_AT" +%s 2>/dev/null || date -d "$CLAIMED_AT" +%s 2>/dev/null || echo "0")
-          NOW=$(date +%s)
-          if [ $(( NOW - CLAIMED_TS )) -lt $CLAIM_TIMEOUT ]; then
-            ACTIVE_CLAIM_COUNT=$(( ACTIVE_CLAIM_COUNT + 1 ))
-          fi
-        fi
-      done
-      echo $(( TOTAL - NON_OPEN - ACTIVE_CLAIM_COUNT ))
-    else
-      jq --arg s "$FILTER_STATUS" '[to_entries[] | select(.value.status == $s)] | length' "$STATUS_FILE" 2>/dev/null || echo "0"
-    fi
+    jq --arg s "$FILTER_STATUS" '[.notifications[] | select(.breeze_status == $s)] | length' "$INBOX" 2>/dev/null || echo "0"
     ;;
 
-  transitions)
-    # State machine: detect new GitHub activity and transition statuses
-    # Called by the poller after writing inbox.json
-    CHANGED=0
-    jq -r 'to_entries[] | "\(.key) \(.value.status) \(.value.github_updated_at // "") \(.value.snooze_until // "")"' "$STATUS_FILE" 2>/dev/null | \
-    while IFS=' ' read -r NOTIF_ID STATUS OLD_GH_UPDATED SNOOZE_UNTIL; do
-      [ -z "$NOTIF_ID" ] && continue
-
-      # Get current github updated_at from inbox
-      CURRENT_GH_UPDATED=$(jq -r --arg id "$NOTIF_ID" '.notifications[] | select(.id == $id) | .updated_at // ""' "$INBOX" 2>/dev/null || echo "")
-
-      TRANSITION=""
-
-      case "$STATUS" in
-        resolved|pending)
-          # Reopen only if GitHub updated_at is NEWER than when we set the status
-          if [ -n "$CURRENT_GH_UPDATED" ] && [ -n "$OLD_GH_UPDATED" ] && [ "$CURRENT_GH_UPDATED" \> "$OLD_GH_UPDATED" ]; then
-            TRANSITION="open"
-          fi
-          ;;
-        snoozed)
-          # Reopen if GitHub updated_at is NEWER OR snooze timer expired
-          if [ -n "$CURRENT_GH_UPDATED" ] && [ -n "$OLD_GH_UPDATED" ] && [ "$CURRENT_GH_UPDATED" \> "$OLD_GH_UPDATED" ]; then
-            TRANSITION="open"
-          elif [ -n "$SNOOZE_UNTIL" ] && [ "$SNOOZE_UNTIL" != "null" ]; then
-            SNOOZE_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$SNOOZE_UNTIL" +%s 2>/dev/null || date -d "$SNOOZE_UNTIL" +%s 2>/dev/null || echo "9999999999")
-            NOW=$(date +%s)
-            if [ "$NOW" -ge "$SNOOZE_TS" ]; then
-              TRANSITION="open"
-            fi
-          fi
-          ;;
-      esac
-
-      if [ -n "$TRANSITION" ]; then
-        # Transition to open = remove from status.json (open is the default)
-        jq --arg id "$NOTIF_ID" 'del(.[$id])' "$STATUS_FILE" > "$STATUS_TMP" && mv "$STATUS_TMP" "$STATUS_FILE"
-        CHANGED=$(( CHANGED + 1 ))
-        # Log the reopen
-        IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL <<< "$(notif_meta "$NOTIF_ID")"
-        log_event "$(jq -nc \
-          --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg event "reopened" --arg id "$NOTIF_ID" \
-          --arg type "$N_TYPE" --arg repo "$N_REPO" --arg title "$N_TITLE" \
-          --arg url "$N_URL" --arg from "$STATUS" --arg trigger "new activity on GitHub" \
-          '{ts:$ts,event:$event,id:$id,type:$type,repo:$repo,title:$title,url:$url,from:$from,trigger:$trigger}')"
-        echo "transition: $NOTIF_ID $STATUS → $TRANSITION"
-      fi
-    done
-
-    # Clean up expired claims
-    for claim_dir in "$CLAIMS_DIR"/*/; do
-      [ -d "$claim_dir" ] || continue
-      if [ -f "$claim_dir/claimed_at" ]; then
-        CLAIMED_AT=$(cat "$claim_dir/claimed_at")
-        CLAIMED_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$CLAIMED_AT" +%s 2>/dev/null || date -d "$CLAIMED_AT" +%s 2>/dev/null || echo "0")
-        NOW=$(date +%s)
-        if [ $(( NOW - CLAIMED_TS )) -ge $CLAIM_TIMEOUT ]; then
-          CLAIM_ID=$(basename "$claim_dir")
-          rm -rf "$claim_dir"
-          echo "transition: $CLAIM_ID claimed → open (timeout)"
-        fi
-      fi
-    done
-    ;;
-
-  gc)
-    # Garbage collect: remove resolved entries older than 7 days
-    CUTOFF=$(date -v-7d -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -d "7 days ago" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
-    jq --arg cutoff "$CUTOFF" '
-      with_entries(select(
-        .value.status != "resolved" or .value.changed_at > $cutoff
-      ))
-    ' "$STATUS_FILE" > "$STATUS_TMP" && mv "$STATUS_TMP" "$STATUS_FILE"
-    # Remove orphan claims
-    for claim_dir in "$CLAIMS_DIR"/*/; do
-      [ -d "$claim_dir" ] || continue
-      CLAIM_ID=$(basename "$claim_dir")
-      EXISTS=$(jq -r --arg id "$CLAIM_ID" '.notifications[] | select(.id == $id) | .id' "$INBOX" 2>/dev/null || echo "")
-      if [ -z "$EXISTS" ]; then
-        rm -rf "$claim_dir"
-        echo "gc: removed orphan claim $CLAIM_ID"
-      fi
-    done
-    echo "gc: done"
-    ;;
-
-  reconcile)
-    # Auto-resolve notifications whose underlying PR/issue is already closed/merged
-    # Groups by repo to minimize API calls (one gh pr list per repo instead of per-PR)
-    RECONCILED=0
-
-    # Get all open notification IDs grouped by repo, filtering to PR and Issue types only
-    REPOS_WITH_OPEN=$(jq -r --slurpfile status "$STATUS_FILE" '
-      [.notifications[] |
-        select(
-          (.type == "PullRequest" or .type == "Issue") and
-          (($status[0][.id].status // "open") == "open")
-        )
-      ] | group_by(.repo) | .[] | .[0].repo
-    ' "$INBOX" 2>/dev/null)
-
-    [ -z "$REPOS_WITH_OPEN" ] && { echo "reconcile: no open PR/issue notifications to check"; exit 0; }
-
-    while IFS= read -r REPO; do
-      [ -z "$REPO" ] && continue
-
-      # Get open notification numbers and IDs for this repo
-      NOTIF_DATA=$(jq -r --arg repo "$REPO" --slurpfile status "$STATUS_FILE" '
-        [.notifications[] |
-          select(
-            .repo == $repo and
-            (.type == "PullRequest" or .type == "Issue") and
-            (($status[0][.id].status // "open") == "open") and
-            .number != null
-          )
-        ] | .[] | "\(.id)\t\(.number)\t\(.type)"
-      ' "$INBOX" 2>/dev/null)
-
-      [ -z "$NOTIF_DATA" ] && continue
-
-      # Fetch all PR states for this repo in one call
-      PR_STATES=$(gh pr list --repo "$REPO" --state all --limit 300 --json number,state 2>/dev/null || echo "[]")
-      # Fetch all issue states for this repo in one call
-      ISSUE_STATES=$(gh issue list --repo "$REPO" --state all --limit 300 --json number,state 2>/dev/null || echo "[]")
-
-      while IFS=$'\t' read -r NOTIF_ID NUMBER TYPE; do
-        [ -z "$NOTIF_ID" ] && continue
-
-        if [ "$TYPE" = "PullRequest" ]; then
-          STATE=$(echo "$PR_STATES" | jq -r --argjson n "$NUMBER" '.[] | select(.number == $n) | .state' 2>/dev/null)
-        else
-          STATE=$(echo "$ISSUE_STATES" | jq -r --argjson n "$NUMBER" '.[] | select(.number == $n) | .state' 2>/dev/null)
-        fi
-
-        RESOLVE_REASON=""
-        case "$STATE" in
-          MERGED) RESOLVE_REASON="auto-resolved: PR #$NUMBER merged" ;;
-          CLOSED) RESOLVE_REASON="auto-resolved: $TYPE #$NUMBER closed" ;;
-        esac
-
-        if [ -n "$RESOLVE_REASON" ]; then
-          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          jq --arg id "$NOTIF_ID" \
-             --arg changed_at "$NOW" \
-             --arg reason "$RESOLVE_REASON" \
-             '.[$id] = {status: "resolved", changed_at: $changed_at, changed_by: "reconcile", reason: $reason, snooze_until: null, github_updated_at: ""}' \
-             "$STATUS_FILE" > "$STATUS_TMP" && mv "$STATUS_TMP" "$STATUS_FILE"
-          # Log the auto-resolve
-          IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL <<< "$(notif_meta "$NOTIF_ID")"
-          log_event "$(jq -nc \
-            --arg ts "$NOW" --arg event "resolved" --arg id "$NOTIF_ID" \
-            --arg type "$N_TYPE" --arg repo "$N_REPO" --arg title "$N_TITLE" \
-            --arg url "$N_URL" --arg by "reconcile" --arg reason "$RESOLVE_REASON" \
-            '{ts:$ts,event:$event,id:$id,type:$type,repo:$repo,title:$title,url:$url,by:$by,reason:$reason}')"
-          RECONCILED=$(( RECONCILED + 1 ))
-        fi
-      done <<< "$NOTIF_DATA"
-    done <<< "$REPOS_WITH_OPEN"
-
-    echo "reconcile: auto-resolved $RECONCILED stale notifications"
+  ensure-labels)
+    REPO="$1"
+    echo "Creating breeze labels on $REPO..."
+    gh label create "breeze:new" --repo "$REPO" --color "0075ca" --description "Breeze: new notification" --force 2>/dev/null || true
+    gh label create "breeze:wip" --repo "$REPO" --color "e4e669" --description "Breeze: work in progress" --force 2>/dev/null || true
+    gh label create "breeze:human" --repo "$REPO" --color "d93f0b" --description "Breeze: needs human attention" --force 2>/dev/null || true
+    gh label create "breeze:done" --repo "$REPO" --color "0e8a16" --description "Breeze: handled" --force 2>/dev/null || true
+    echo "Labels created on $REPO"
     ;;
 
   help|*)
     echo "Usage: breeze-status-manager <command> [args]"
-    echo "Commands: get, set, claim, release, list, count, transitions, reconcile, gc"
+    echo ""
+    echo "Commands:"
+    echo "  get <id>                    Get breeze status for a notification"
+    echo "  set <id> <status>           Set status (new, wip, human, done) via GitHub labels"
+    echo "  claim <id> <session>        Claim a notification for local agent coordination"
+    echo "  release <id>                Release a claim"
+    echo "  list [--status <status>]    List notification IDs by status"
+    echo "  count [--status <status>]   Count notifications by status"
+    echo "  ensure-labels <repo>        Create breeze:* labels on a repo"
     ;;
 esac

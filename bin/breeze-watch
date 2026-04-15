@@ -5,7 +5,6 @@ set -euo pipefail
 
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
 LOG_FILE="$BREEZE_DIR/activity.log"
-STATUS_FILE="$BREEZE_DIR/status.json"
 INBOX="$BREEZE_DIR/inbox.json"
 
 mkdir -p "$BREEZE_DIR"
@@ -104,28 +103,21 @@ format_line() {
       [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
-    resolved)
+    don[e]|resolved)
       printf "${DIM}%s${RESET}  ${CLR}✓ DONE${RESET}      ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
       [ -n "$REASON" ] && printf "              ${DIM}↳ %s${RESET}\n" "$REASON"
       [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
-    pending)
-      printf "${DIM}%s${RESET}  ${CLR}⏳ WAIT${RESET}     ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+    wip)
+      printf "${DIM}%s${RESET}  ${CLR}🔧 WIP${RESET}      ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
       [ -n "$REASON" ] && printf "              ${DIM}↳ %s${RESET}\n" "$REASON"
       [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
-    snoozed)
-      local UNTIL=$(echo "$LINE" | jq -r '.snooze_until // ""' 2>/dev/null)
-      printf "${DIM}%s${RESET}  ${CLR}⏸ SNOOZE${RESET}    ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
-      [ -n "$UNTIL" ] && printf "              ${DIM}↳ until %s${RESET}\n" "$UNTIL"
-      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
-      LINE_COUNT=$((LINE_COUNT + 1))
-      ;;
-    reopened)
-      printf "${DIM}%s${RESET}  ${CLR}↺ REOPEN${RESET}    ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
-      [ -n "$TRIGGER" ] && printf "              ${DIM}↳ %s (was %s)${RESET}\n" "$TRIGGER" "$FROM"
+    human)
+      printf "${DIM}%s${RESET}  ${CLR}🙋 HUMAN${RESET}    ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      [ -n "$REASON" ] && printf "              ${DIM}↳ %s${RESET}\n" "$REASON"
       [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
@@ -148,19 +140,15 @@ print_header() {
   echo ""
 
   # Show status summary if available
-  if [ -f "$INBOX" ] && [ -f "$STATUS_FILE" ]; then
-    local TOTAL=$(jq '.notifications | length' "$INBOX" 2>/dev/null || echo "0")
-    local NON_OPEN=$(jq 'to_entries | map(select(.value.status != "open")) | length' "$STATUS_FILE" 2>/dev/null || echo "0")
-    local OPEN=$((TOTAL - NON_OPEN))
-    local CLAIMED=$(jq '[to_entries[] | select(.value.status == "claimed")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
-    local PENDING=$(jq '[to_entries[] | select(.value.status == "pending")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
-    local SNOOZED=$(jq '[to_entries[] | select(.value.status == "snoozed")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
-    local RESOLVED=$(jq '[to_entries[] | select(.value.status == "resolved")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
-    printf "  ${RAINBOW[0]}●${RESET} ${BOLD}%s open${RESET}  " "$OPEN"
-    printf "${RAINBOW[2]}●${RESET} %s claimed  " "$CLAIMED"
-    printf "${RAINBOW[3]}●${RESET} %s pending  " "$PENDING"
-    printf "${RAINBOW[6]}●${RESET} %s snoozed  " "$SNOOZED"
-    printf "${RAINBOW[4]}●${RESET} %s resolved\n" "$RESOLVED"
+  if [ -f "$INBOX" ]; then
+    local NEW=$(jq '[.notifications[] | select(.breeze_status == "new")] | length' "$INBOX" 2>/dev/null || echo "0")
+    local WIP=$(jq '[.notifications[] | select(.breeze_status == "wip")] | length' "$INBOX" 2>/dev/null || echo "0")
+    local HUMAN=$(jq '[.notifications[] | select(.breeze_status == "human")] | length' "$INBOX" 2>/dev/null || echo "0")
+    local DONE=$(jq '[.notifications[] | select(.breeze_status == "done")] | length' "$INBOX" 2>/dev/null || echo "0")
+    printf "  ${RAINBOW[0]}●${RESET} ${BOLD}%s new${RESET}  " "$NEW"
+    printf "${RAINBOW[2]}●${RESET} %s wip  " "$WIP"
+    printf "${RAINBOW[3]}●${RESET} %s human  " "$HUMAN"
+    printf "${RAINBOW[4]}●${RESET} %s done\n" "$DONE"
   fi
 
   echo ""

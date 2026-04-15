@@ -20,8 +20,8 @@ allowed-tools:
 
 You help the user manage their GitHub notifications from inside Claude Code.
 You can read their inbox, summarize notifications, suggest actions, and execute
-them via the `gh` CLI. You track notification status using breeze's own 5-state
-system (open, claimed, pending, snoozed, resolved).
+them via the `gh` CLI. Status is tracked via GitHub labels (breeze:new, breeze:wip,
+breeze:human, breeze:done) — no local state file needed.
 
 ## Setup Check
 
@@ -47,17 +47,16 @@ else
   echo "NO_INBOX"
 fi
 
-# Check status manager
-if [ -n "$STATUS_MGR" ] && [ -x "$STATUS_MGR" ]; then
-  OPEN=$("$STATUS_MGR" count --status open)
-  CLAIMED=$("$STATUS_MGR" count --status claimed)
-  PENDING=$("$STATUS_MGR" count --status pending)
-  SNOOZED=$("$STATUS_MGR" count --status snoozed)
-  RESOLVED=$("$STATUS_MGR" count --status resolved)
-  echo "STATUS: $OPEN open · $CLAIMED claimed · $PENDING pending · $SNOOZED snoozed · $RESOLVED resolved"
+# Check status counts from inbox.json breeze_status field
+if [ -f "$INBOX" ]; then
+  NEW=$(jq '[.notifications[] | select(.breeze_status == "new")] | length' "$INBOX" 2>/dev/null || echo "0")
+  WIP=$(jq '[.notifications[] | select(.breeze_status == "wip")] | length' "$INBOX" 2>/dev/null || echo "0")
+  HUMAN=$(jq '[.notifications[] | select(.breeze_status == "human")] | length' "$INBOX" 2>/dev/null || echo "0")
+  DONE=$(jq '[.notifications[] | select(.breeze_status == "done")] | length' "$INBOX" 2>/dev/null || echo "0")
+  echo "STATUS: $NEW new · $WIP wip · $HUMAN human · $DONE done"
   echo "STATUS_MGR: $STATUS_MGR"
 else
-  echo "NO_STATUS_MGR"
+  echo "NO_STATUS"
 fi
 ```
 
@@ -72,38 +71,32 @@ BREEZE_POLL=$(find ~/.claude/skills -name breeze-poll -type f 2>/dev/null | head
 
 ## Show Inbox Dashboard
 
-Present a dashboard grouped by project (repo), showing only OPEN notifications.
+Present a dashboard grouped by project (repo), showing only NEW notifications (breeze_status == "new").
 
 First, fetch the raw data:
 
 ```bash
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
-STATUS_FILE="$BREEZE_DIR/status.json"
-[ -f "$STATUS_FILE" ] || echo '{}' > "$STATUS_FILE"
 
-jq -r --slurpfile status "$STATUS_FILE" '
-  [.notifications[] | select(($status[0][.id].status // "open") == "open")]
+jq -r '
+  [.notifications[] | select(.breeze_status == "new")]
   | group_by(.repo)
   | map({
       repo: .[0].repo,
       items: [.[] | {id: .id, type: .type, title: .title, reason: .reason, number: .number, html_url: .html_url, updated_at: .updated_at}]
     })
   | sort_by(-((.items | length)))
-  | .[]
-  | "\(.repo)\t\(.items | length)\t" +
-    ([.items[] |
-      "\(.type)\t\(.title)\t\(.reason)\t\(.html_url)\t\(.number)"
-    ] | join("|||"))
-' "$BREEZE_DIR/inbox.json" 2>/dev/null
+  | .[] | {repo: .repo, count: (.items | length), items: [.items[] | {t: .type, title: .title, reason: .reason, url: .html_url}]}
+' "$BREEZE_DIR/inbox.json" 2>/dev/null | jq -s '.'
 ```
 
 Then present the dashboard using **aggressive markdown formatting** for readability:
 
 ### Formatting rules
 
-1. **Status bar** at the top with emoji markers:
+1. **Status bar** at the top with emoji markers and type breakdown:
    ```
-   **breeze** | :red_circle: 15 open · :hourglass: 3 pending · :zzz: 1 snoozed · :white_check_mark: 166 resolved
+   **breeze** | :red_circle: 15 new (10 PRs · 5 issues) · :wrench: 3 wip · :raising_hand: 2 human · :white_check_mark: 50 done
    ```
 
 2. **Group by repo** using `###` headers. Use **short repo names** (drop the owner prefix unless ambiguous).
@@ -119,7 +112,7 @@ Then present the dashboard using **aggressive markdown formatting** for readabil
 Example output:
 
 ```markdown
-**breeze** | :red_circle: 15 open · :hourglass: 3 pending · :zzz: 1 snoozed · :white_check_mark: 50 resolved
+**breeze** | :red_circle: 15 new (10 PRs · 5 issues) · :wrench: 3 wip · :raising_hand: 2 human · :white_check_mark: 50 done
 
 ### paperclip (10)
 
@@ -140,39 +133,35 @@ Example output:
 | 2 | ^ | [sync: polish inbox workflows](https://github.com/serenakeyitan/paperclip-tree/pull/259) | _yours_ |
 | 3 | ^ | [sync: adapter capability flags](https://github.com/serenakeyitan/paperclip-tree/pull/295) | _yours_ |
 | | | *... and 9 more* | |
-
-### first-tree-context (2)
-
-| # | | Title | Why |
-|---|---|-------|-----|
-| 1 | ^ | [meeting sync: 2026-04-14](https://github.com/agent-team-foundation/first-tree-context/pull/131) | @you |
-| 2 | ^ | [marketing: launch strategy](https://github.com/agent-team-foundation/first-tree-context/pull/73) | @you |
 ```
 
-After showing the dashboard, ask: "Pick a number from any project to dive in, or tell me what you want to do (e.g. 'show all paperclip', 'resolve paperclip-tree sync PRs', 'snooze #3 for 2 days')."
+After showing the dashboard, ask: "Pick a number from any project to dive in, or tell me what you want to do (e.g. 'show all paperclip', 'show wip', 'mark #3 as done')."
 
 ## Status Commands
 
-The user can change notification status with natural language:
+The user can change notification status with natural language. Status is managed via GitHub labels:
 
-- **"resolve #3"** or **"mark #3 as done"** → set to resolved
-- **"snooze #5 for 3 days"** → set to snoozed with snooze_until
-- **"skip #2"** or **"I'll deal with #2 later"** → snooze for 24h
-- **"show pending"** → list pending notifications
-- **"show resolved"** → list recently resolved (last 7 days)
+- **"mark as wip"** or **"I'm working on this"** → `breeze:wip` label
+- **"needs human"** or **"escalate"** → `breeze:human` label
+- **"done"** or **"resolve #3"** or **"mark as done"** → `breeze:done` label
+- **"reopen"** or **"back to new"** → remove all breeze labels
+- **"show wip"** → list items with `breeze:wip` label
+- **"show done"** → list recently done items
 - **"show all"** → show all statuses
 
-To change status, use the status manager:
+To change status, use the status manager (which applies GitHub labels):
 ```bash
-# Resolve
-$STATUS_MGR set <notification-id> resolved --by "human" --reason "Approved PR"
+# Mark as work in progress
+$STATUS_MGR set <notification-id> wip --by "human" --reason "Reviewing PR"
 
-# Snooze for 3 days
-SNOOZE_UNTIL=$(date -v+3d -u +%Y-%m-%dT%H:%M:%SZ)
-$STATUS_MGR set <notification-id> snoozed --by "human" --snooze-until "$SNOOZE_UNTIL"
+# Mark as needs human attention
+$STATUS_MGR set <notification-id> human --by "human" --reason "Waiting for author to add tests"
 
-# Mark as pending (waiting on someone)
-$STATUS_MGR set <notification-id> pending --by "human" --reason "Waiting for author to add tests"
+# Mark as done
+$STATUS_MGR set <notification-id> done --by "human" --reason "Approved PR"
+
+# Back to new (remove all breeze labels)
+$STATUS_MGR set <notification-id> new --by "human"
 ```
 
 ## Dive Into a Notification
@@ -238,19 +227,19 @@ When suggesting an action, assess your confidence:
 - Duplicate issue (exact match found)
 - Bot-generated PR that follows a known pattern
 - Show: "HANDLED: [action]. Confidence: X%. [Undo] [View on GitHub]"
-- Set status to resolved
+- Set status to done
 
 **MEDIUM (40-80%)** — Suggest and wait for human:
 - Code change PR that looks reasonable but touches important areas
 - Issue that could be closed but might have nuance
 - Show: "SUGGESTION: [action]. Confidence: X%. [Approve] [Override] [Skip]"
-- Keep status as open (human decides)
+- Keep status as new (human decides)
 
 **LOW (<40%)** — Escalate:
 - Security-related changes, breaking changes, architectural decisions
 - Contentious issues, unclear requirements
-- Show: "ESCALATION: I'm not sure about this. [full context]. [Take over] [Snooze]"
-- Keep status as open
+- Show: "ESCALATION: I'm not sure about this. [full context]. [Take over]"
+- Set status to human
 
 ## Execute Actions
 
@@ -269,13 +258,13 @@ When the user approves an action, translate to `gh` CLI:
 - Merge PR: `gh pr merge NUMBER --repo OWNER/REPO`
 - Delete branch: warn that this is destructive
 
-**After executing:** Update status:
+**After executing:** Update status via labels:
 ```bash
 # If action fully resolves it (approved, closed, merged)
-$STATUS_MGR set <notification-id> resolved --by "$SESSION_ID" --reason "Approved PR #NUMBER"
+$STATUS_MGR set <notification-id> done --by "$SESSION_ID" --reason "Approved PR #NUMBER"
 
 # If action needs follow-up (requested changes, asked a question)
-$STATUS_MGR set <notification-id> pending --by "$SESSION_ID" --reason "Requested changes, waiting for author"
+$STATUS_MGR set <notification-id> human --by "$SESSION_ID" --reason "Requested changes, waiting for author"
 ```
 
 **Footer:** Append to every comment/review body:
@@ -290,15 +279,16 @@ Always show the exact command before executing. Wait for user confirmation.
 
 ## Bulk Actions
 
-- "resolve all docs PRs" → find PRs with docs-only changes, resolve them
+- "mark all done" → find items that are merged/closed, mark as done
 - "show only paperclip-tree" → filter by repo
 - "show only review requests" → filter by reason
-- "snooze everything from bot-name" → snooze by author pattern
+- "show only mentions" → filter by @you reason
 
 ## Tips
 
 - Links are clickable in most terminals
 - Notifications are grouped by project (repo) for easy scanning
-- The statusline only counts open items — resolving/snoozing shrinks the number
-- The number is stable across terminals because it's based on YOUR status, not GitHub's read/unread
+- The statusline only counts `new` items — marking wip/human/done shrinks the number
+- Status is stored as GitHub labels — visible across all machines and terminals
+- Non-labelers get `new` and `done` automatically (done = merged/closed on GitHub)
 - Discussions use GitHub's GraphQL API which requires `read:discussion` scope

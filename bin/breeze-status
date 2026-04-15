@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# breeze-status — statusline output based on breeze's own status system
-# Only counts "open" notifications (not claimed/pending/snoozed/resolved)
+# breeze-status — statusline output based on GitHub labels (breeze_status field)
+# Only counts "new" notifications in the statusline
 set -euo pipefail
 
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
 INBOX="$BREEZE_DIR/inbox.json"
-STATUS_FILE="$BREEZE_DIR/status.json"
 BELL_STATE="$BREEZE_DIR/.bell_state"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Pass through stdin
 cat > /dev/null
@@ -29,22 +27,16 @@ if [ "$FILE_AGE" -gt 600 ]; then
   exit 0
 fi
 
-# Initialize status.json if missing
-[ -f "$STATUS_FILE" ] || echo '{}' > "$STATUS_FILE"
-
-# Count open notifications: total in inbox minus those with non-open status
-# This is the single source of truth — same file, same number, every terminal
+# Count new notifications from breeze_status field
 CURRENT_POLL=$(jq -r '.last_poll' "$INBOX" 2>/dev/null || echo "")
 
-SUMMARY=$(jq -r --slurpfile status "$STATUS_FILE" '
-  [.notifications[] | select(
-    ($status[0][.id].status // "open") == "open"
-  )]
+SUMMARY=$(jq -r '
+  [.notifications[] | select(.breeze_status == "new")]
   | if length == 0 then ""
     else
-      . as $open |
-      ($open | length) as $total |
-      ($open | group_by(.type)
+      . as $items |
+      ($items | length) as $total |
+      ($items | group_by(.type)
       | map({type: .[0].type, count: length})
       | sort_by(-.count)
       | map(
@@ -60,24 +52,22 @@ SUMMARY=$(jq -r --slurpfile status "$STATUS_FILE" '
     end
 ' "$INBOX" 2>/dev/null)
 
-OPEN_COUNT=$(jq --slurpfile status "$STATUS_FILE" '
-  [.notifications[] | select(($status[0][.id].status // "open") == "open")] | length
-' "$INBOX" 2>/dev/null || echo "0")
+NEW_COUNT=$(jq '[.notifications[] | select(.breeze_status == "new")] | length' "$INBOX" 2>/dev/null || echo "0")
 
-# Bell logic: ring once per new poll that increased the open count
+# Bell logic: ring once per new poll that increased the new count
 NEW_SUFFIX=""
 if [ -f "$BELL_STATE" ]; then
   PREV_POLL=$(cut -d' ' -f1 "$BELL_STATE" 2>/dev/null || echo "")
   PREV_COUNT=$(cut -d' ' -f2 "$BELL_STATE" 2>/dev/null || echo "0")
 
-  if [ "$CURRENT_POLL" != "$PREV_POLL" ] && [ "$OPEN_COUNT" -gt "$PREV_COUNT" ]; then
-    NEW_DIFF=$(( OPEN_COUNT - PREV_COUNT ))
+  if [ "$CURRENT_POLL" != "$PREV_POLL" ] && [ "$NEW_COUNT" -gt "$PREV_COUNT" ]; then
+    NEW_DIFF=$(( NEW_COUNT - PREV_COUNT ))
     NEW_SUFFIX=" (+$NEW_DIFF new)"
     printf '\a'
   fi
 fi
 
-echo "$CURRENT_POLL $OPEN_COUNT" > "$BELL_STATE"
+echo "$CURRENT_POLL $NEW_COUNT" > "$BELL_STATE"
 
 if [ -n "$SUMMARY" ]; then
   echo "${SUMMARY}${NEW_SUFFIX}"
