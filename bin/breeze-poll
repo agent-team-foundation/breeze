@@ -32,7 +32,7 @@ if [ -f "$CONFIG" ]; then
 fi
 
 # Step 1: Fetch raw notifications to a temp file (avoids shell quoting issues)
-gh api /notifications --paginate > "$RAW_TMP" 2>/dev/null || {
+gh api '/notifications?all=true' --paginate > "$RAW_TMP" 2>/dev/null || {
   echo "WARN: GitHub API failed, skipping" >&2
   rm -f "$RAW_TMP"
   exit 0
