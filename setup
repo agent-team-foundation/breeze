@@ -106,7 +106,7 @@ if [ "$(uname)" = "Darwin" ]; then
     <string>$SCRIPT_DIR/bin/breeze-poll</string>
   </array>
   <key>StartInterval</key>
-  <integer>180</integer>
+  <integer>60</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
@@ -128,7 +128,7 @@ EOF
 
 else
   # Linux: crontab
-  CRON_CMD="*/3 * * * * /bin/bash $SCRIPT_DIR/bin/breeze-poll >> $BREEZE_DIR/poll.log 2>&1"
+  CRON_CMD="* * * * * /bin/bash $SCRIPT_DIR/bin/breeze-poll >> $BREEZE_DIR/poll.log 2>&1"
   (crontab -l 2>/dev/null | grep -v breeze-poll; echo "$CRON_CMD") | crontab -
   echo "  Installed crontab entry (every 3 minutes)"
 fi

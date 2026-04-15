@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # breeze-status — reads inbox.json and outputs a one-line statusline summary
-# Rings terminal bell when new notifications arrive
+# Rings terminal bell when a new poll brings more notifications
 set -euo pipefail
 
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
 INBOX="$BREEZE_DIR/inbox.json"
-LAST_COUNT_FILE="$BREEZE_DIR/.last_count"
+BELL_STATE="$BREEZE_DIR/.bell_state"
 
 # Pass through stdin (Claude Code sends session JSON)
 cat > /dev/null
@@ -27,23 +27,33 @@ if [ "$FILE_AGE" -gt 600 ]; then
   exit 0
 fi
 
-CURRENT_COUNT=$(jq '.notifications | length' "$INBOX" 2>/dev/null || echo "0")
+# Read current state from inbox (single jq call)
+CURRENT=$(jq -r '
+  {
+    count: (.notifications | length),
+    poll: .last_poll
+  } | "\(.count) \(.poll)"
+' "$INBOX" 2>/dev/null) || exit 0
 
-# Compare with last known count — bell if new notifications arrived
-LAST_COUNT=0
-if [ -f "$LAST_COUNT_FILE" ]; then
-  LAST_COUNT=$(cat "$LAST_COUNT_FILE" 2>/dev/null || echo "0")
+CURRENT_COUNT=$(echo "$CURRENT" | cut -d' ' -f1)
+CURRENT_POLL=$(echo "$CURRENT" | cut -d' ' -f2)
+
+# Bell logic: ring once per new poll that increased the count
+# bell_state stores "last_poll_ts last_count"
+NEW_SUFFIX=""
+if [ -f "$BELL_STATE" ]; then
+  PREV_POLL=$(cut -d' ' -f1 "$BELL_STATE" 2>/dev/null || echo "")
+  PREV_COUNT=$(cut -d' ' -f2 "$BELL_STATE" 2>/dev/null || echo "0")
+
+  if [ "$CURRENT_POLL" != "$PREV_POLL" ] && [ "$CURRENT_COUNT" -gt "$PREV_COUNT" ]; then
+    NEW_DIFF=$(( CURRENT_COUNT - PREV_COUNT ))
+    NEW_SUFFIX=" (+$NEW_DIFF new)"
+    printf '\a'
+  fi
 fi
 
-NEW_COUNT=0
-if [ "$CURRENT_COUNT" -gt "$LAST_COUNT" ]; then
-  NEW_COUNT=$(( CURRENT_COUNT - LAST_COUNT ))
-  # Ring terminal bell
-  printf '\a'
-fi
-
-# Save current count
-echo "$CURRENT_COUNT" > "$LAST_COUNT_FILE"
+# Update bell state (all terminals read the same file, same answer)
+echo "$CURRENT_POLL $CURRENT_COUNT" > "$BELL_STATE"
 
 # Build summary
 SUMMARY=$(jq -r '
@@ -67,9 +77,5 @@ SUMMARY=$(jq -r '
 ' "$INBOX" 2>/dev/null)
 
 if [ -n "$SUMMARY" ]; then
-  if [ "$NEW_COUNT" -gt 0 ]; then
-    echo "$SUMMARY (+$NEW_COUNT new)"
-  else
-    echo "$SUMMARY"
-  fi
+  echo "${SUMMARY}${NEW_SUFFIX}"
 fi
