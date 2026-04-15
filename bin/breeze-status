@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # breeze-status — reads inbox.json and outputs a one-line statusline summary
+# Rings terminal bell when new notifications arrive
 set -euo pipefail
 
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
 INBOX="$BREEZE_DIR/inbox.json"
+LAST_COUNT_FILE="$BREEZE_DIR/.last_count"
 
 # Pass through stdin (Claude Code sends session JSON)
 cat > /dev/null
@@ -25,7 +27,25 @@ if [ "$FILE_AGE" -gt 600 ]; then
   exit 0
 fi
 
-# Count notifications by type
+CURRENT_COUNT=$(jq '.notifications | length' "$INBOX" 2>/dev/null || echo "0")
+
+# Compare with last known count — bell if new notifications arrived
+LAST_COUNT=0
+if [ -f "$LAST_COUNT_FILE" ]; then
+  LAST_COUNT=$(cat "$LAST_COUNT_FILE" 2>/dev/null || echo "0")
+fi
+
+NEW_COUNT=0
+if [ "$CURRENT_COUNT" -gt "$LAST_COUNT" ]; then
+  NEW_COUNT=$(( CURRENT_COUNT - LAST_COUNT ))
+  # Ring terminal bell
+  printf '\a'
+fi
+
+# Save current count
+echo "$CURRENT_COUNT" > "$LAST_COUNT_FILE"
+
+# Build summary
 SUMMARY=$(jq -r '
   .notifications
   | if length == 0 then ""
@@ -45,5 +65,9 @@ SUMMARY=$(jq -r '
 ' "$INBOX" 2>/dev/null)
 
 if [ -n "$SUMMARY" ]; then
-  echo "$SUMMARY"
+  if [ "$NEW_COUNT" -gt 0 ]; then
+    echo "$SUMMARY (+$NEW_COUNT new)"
+  else
+    echo "$SUMMARY"
+  fi
 fi
