@@ -20,12 +20,26 @@ CLAIMS_DIR="$BREEZE_DIR/claims"
 INBOX="$BREEZE_DIR/inbox.json"
 CLAIM_TIMEOUT=300  # 5 minutes in seconds
 
+LOG_FILE="$BREEZE_DIR/activity.log"
+
 mkdir -p "$BREEZE_DIR" "$CLAIMS_DIR"
 
 # Initialize status.json if missing
 if [ ! -f "$STATUS_FILE" ]; then
   echo '{}' > "$STATUS_FILE"
 fi
+
+# Log an event to activity.log (JSONL, append-only)
+# Usage: log_event '{"event":"resolved","id":"123",...}'
+log_event() {
+  echo "$1" >> "$LOG_FILE"
+}
+
+# Get notification metadata from inbox for logging
+notif_meta() {
+  local ID="$1"
+  jq -r --arg id "$ID" '.notifications[] | select(.id == $id) | "\(.type)\t\(.repo)\t\(.title)\t\(.html_url)"' "$INBOX" 2>/dev/null || echo "unknown\tunknown\tunknown\t"
+}
 
 CMD="${1:-help}"
 shift || true
@@ -78,6 +92,19 @@ case "$CMD" in
     if [ "$NEW_STATUS" != "claimed" ]; then
       rm -rf "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null || true
     fi
+    # Log the status change
+    IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL <<< "$(notif_meta "$NOTIF_ID")"
+    log_event "$(jq -nc \
+      --arg ts "$NOW" \
+      --arg event "$NEW_STATUS" \
+      --arg id "$NOTIF_ID" \
+      --arg type "$N_TYPE" \
+      --arg repo "$N_REPO" \
+      --arg title "$N_TITLE" \
+      --arg url "$N_URL" \
+      --arg by "$SESSION_ID" \
+      --arg reason "$REASON" \
+      '{ts:$ts,event:$event,id:$id,type:$type,repo:$repo,title:$title,url:$url,by:$by,reason:$reason}')"
     echo "$NEW_STATUS"
     ;;
 
@@ -87,9 +114,17 @@ case "$CMD" in
     ACTION="${1:-working}"
     # Atomic claim via mkdir
     if mkdir "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null; then
+      NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
       echo "$SESSION_ID" > "$CLAIMS_DIR/$NOTIF_ID/claimed_by"
-      date -u +%Y-%m-%dT%H:%M:%SZ > "$CLAIMS_DIR/$NOTIF_ID/claimed_at"
+      echo "$NOW_TS" > "$CLAIMS_DIR/$NOTIF_ID/claimed_at"
       echo "$ACTION" > "$CLAIMS_DIR/$NOTIF_ID/action"
+      # Log the claim
+      IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL <<< "$(notif_meta "$NOTIF_ID")"
+      log_event "$(jq -nc \
+        --arg ts "$NOW_TS" --arg event "claimed" --arg id "$NOTIF_ID" \
+        --arg type "$N_TYPE" --arg repo "$N_REPO" --arg title "$N_TITLE" \
+        --arg url "$N_URL" --arg by "$SESSION_ID" --arg action "$ACTION" \
+        '{ts:$ts,event:$event,id:$id,type:$type,repo:$repo,title:$title,url:$url,by:$by,action:$action}')"
       echo "claimed"
     else
       # Check if existing claim has timed out
@@ -218,6 +253,13 @@ case "$CMD" in
         # Transition to open = remove from status.json (open is the default)
         jq --arg id "$NOTIF_ID" 'del(.[$id])' "$STATUS_FILE" > "$STATUS_TMP" && mv "$STATUS_TMP" "$STATUS_FILE"
         CHANGED=$(( CHANGED + 1 ))
+        # Log the reopen
+        IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL <<< "$(notif_meta "$NOTIF_ID")"
+        log_event "$(jq -nc \
+          --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg event "reopened" --arg id "$NOTIF_ID" \
+          --arg type "$N_TYPE" --arg repo "$N_REPO" --arg title "$N_TITLE" \
+          --arg url "$N_URL" --arg from "$STATUS" --arg trigger "new activity on GitHub" \
+          '{ts:$ts,event:$event,id:$id,type:$type,repo:$repo,title:$title,url:$url,from:$from,trigger:$trigger}')"
         echo "transition: $NOTIF_ID $STATUS → $TRANSITION"
       fi
     done
@@ -259,8 +301,84 @@ case "$CMD" in
     echo "gc: done"
     ;;
 
+  reconcile)
+    # Auto-resolve notifications whose underlying PR/issue is already closed/merged
+    # Groups by repo to minimize API calls (one gh pr list per repo instead of per-PR)
+    RECONCILED=0
+
+    # Get all open notification IDs grouped by repo, filtering to PR and Issue types only
+    REPOS_WITH_OPEN=$(jq -r --slurpfile status "$STATUS_FILE" '
+      [.notifications[] |
+        select(
+          (.type == "PullRequest" or .type == "Issue") and
+          (($status[0][.id].status // "open") == "open")
+        )
+      ] | group_by(.repo) | .[] | .[0].repo
+    ' "$INBOX" 2>/dev/null)
+
+    [ -z "$REPOS_WITH_OPEN" ] && { echo "reconcile: no open PR/issue notifications to check"; exit 0; }
+
+    while IFS= read -r REPO; do
+      [ -z "$REPO" ] && continue
+
+      # Get open notification numbers and IDs for this repo
+      NOTIF_DATA=$(jq -r --arg repo "$REPO" --slurpfile status "$STATUS_FILE" '
+        [.notifications[] |
+          select(
+            .repo == $repo and
+            (.type == "PullRequest" or .type == "Issue") and
+            (($status[0][.id].status // "open") == "open") and
+            .number != null
+          )
+        ] | .[] | "\(.id)\t\(.number)\t\(.type)"
+      ' "$INBOX" 2>/dev/null)
+
+      [ -z "$NOTIF_DATA" ] && continue
+
+      # Fetch all PR states for this repo in one call
+      PR_STATES=$(gh pr list --repo "$REPO" --state all --limit 300 --json number,state 2>/dev/null || echo "[]")
+      # Fetch all issue states for this repo in one call
+      ISSUE_STATES=$(gh issue list --repo "$REPO" --state all --limit 300 --json number,state 2>/dev/null || echo "[]")
+
+      while IFS=$'\t' read -r NOTIF_ID NUMBER TYPE; do
+        [ -z "$NOTIF_ID" ] && continue
+
+        if [ "$TYPE" = "PullRequest" ]; then
+          STATE=$(echo "$PR_STATES" | jq -r --argjson n "$NUMBER" '.[] | select(.number == $n) | .state' 2>/dev/null)
+        else
+          STATE=$(echo "$ISSUE_STATES" | jq -r --argjson n "$NUMBER" '.[] | select(.number == $n) | .state' 2>/dev/null)
+        fi
+
+        RESOLVE_REASON=""
+        case "$STATE" in
+          MERGED) RESOLVE_REASON="auto-resolved: PR #$NUMBER merged" ;;
+          CLOSED) RESOLVE_REASON="auto-resolved: $TYPE #$NUMBER closed" ;;
+        esac
+
+        if [ -n "$RESOLVE_REASON" ]; then
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq --arg id "$NOTIF_ID" \
+             --arg changed_at "$NOW" \
+             --arg reason "$RESOLVE_REASON" \
+             '.[$id] = {status: "resolved", changed_at: $changed_at, changed_by: "reconcile", reason: $reason, snooze_until: null, github_updated_at: ""}' \
+             "$STATUS_FILE" > "$STATUS_TMP" && mv "$STATUS_TMP" "$STATUS_FILE"
+          # Log the auto-resolve
+          IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL <<< "$(notif_meta "$NOTIF_ID")"
+          log_event "$(jq -nc \
+            --arg ts "$NOW" --arg event "resolved" --arg id "$NOTIF_ID" \
+            --arg type "$N_TYPE" --arg repo "$N_REPO" --arg title "$N_TITLE" \
+            --arg url "$N_URL" --arg by "reconcile" --arg reason "$RESOLVE_REASON" \
+            '{ts:$ts,event:$event,id:$id,type:$type,repo:$repo,title:$title,url:$url,by:$by,reason:$reason}')"
+          RECONCILED=$(( RECONCILED + 1 ))
+        fi
+      done <<< "$NOTIF_DATA"
+    done <<< "$REPOS_WITH_OPEN"
+
+    echo "reconcile: auto-resolved $RECONCILED stale notifications"
+    ;;
+
   help|*)
     echo "Usage: breeze-status-manager <command> [args]"
-    echo "Commands: get, set, claim, release, list, count, transitions, gc"
+    echo "Commands: get, set, claim, release, list, count, transitions, reconcile, gc"
     ;;
 esac

@@ -109,17 +109,44 @@ if [ -n "$REPOS_FILTER" ]; then
   fi
 fi
 
-# Step 4: Build final inbox JSON
-jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+# Step 4: Detect new notifications (diff old vs new inbox)
+LOG_FILE="$BREEZE_DIR/activity.log"
+OLD_IDS=""
+if [ -f "$INBOX" ]; then
+  OLD_IDS=$(jq -r '.notifications[].id' "$INBOX" 2>/dev/null | sort)
+fi
+NEW_IDS=$(jq -r '.[].id' "$BREEZE_DIR/.enriched.json" 2>/dev/null | sort)
+
+# Find IDs in new but not in old
+NEW_NOTIFS=$(comm -13 <(echo "$OLD_IDS") <(echo "$NEW_IDS") 2>/dev/null || true)
+
+# Step 5: Build final inbox JSON
+POLL_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+jq --arg ts "$POLL_TS" \
   '{last_poll: $ts, notifications: .}' "$BREEZE_DIR/.enriched.json" > "$INBOX_TMP"
 
 mv "$INBOX_TMP" "$INBOX"
+
+# Log new notifications
+if [ -n "$NEW_NOTIFS" ]; then
+  while IFS= read -r NID; do
+    [ -z "$NID" ] && continue
+    jq -r --arg id "$NID" --arg ts "$POLL_TS" \
+      '.notifications[] | select(.id == $id) | {ts: $ts, event: "new", id: .id, type: .type, repo: .repo, title: .title, url: .html_url}' \
+      "$INBOX" 2>/dev/null >> "$LOG_FILE"
+  done <<< "$NEW_NOTIFS"
+fi
+
+# Log poll event
+echo "{\"ts\":\"$POLL_TS\",\"event\":\"poll\",\"count\":$(jq '.notifications | length' "$INBOX")}" >> "$LOG_FILE"
+
 rm -f "$RAW_TMP" "$BREEZE_DIR/.enriched.json"
 
-# Step 5: Run state machine transitions (reopen resolved/pending/snoozed on new activity)
+# Step 6: Run state machine transitions (reopen resolved/pending/snoozed on new activity)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -x "$SCRIPT_DIR/breeze-status-manager" ]; then
   "$SCRIPT_DIR/breeze-status-manager" transitions 2>/dev/null || true
+  "$SCRIPT_DIR/breeze-status-manager" reconcile 2>/dev/null || true
   "$SCRIPT_DIR/breeze-status-manager" gc 2>/dev/null || true
 fi
 
