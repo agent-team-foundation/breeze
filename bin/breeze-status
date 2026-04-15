@@ -23,7 +23,7 @@ else
 fi
 
 if [ "$FILE_AGE" -gt 600 ]; then
-  echo "breeze: stale (poller not running?)"
+  echo "/breeze: stale (poller not running?)"
   exit 0
 fi
 
@@ -60,7 +60,7 @@ SUMMARY=$(jq -r '
           else "\(.count) \(.type)"
           end
         )
-      | "breeze: " + join(" · ")
+      | "/breeze: " + join(" · ")
     end
 ' "$INBOX" 2>/dev/null)
 
