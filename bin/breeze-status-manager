@@ -94,33 +94,39 @@ case "$CMD" in
       exit 1
     fi
 
+    # Helper: remove each breeze label individually (gh fails if any label in a comma list doesn't exist)
+    remove_breeze_labels() {
+      local num="$1" repo="$2"
+      for lbl in breeze:new breeze:wip breeze:human breeze:done; do
+        gh issue edit "$num" --repo "$repo" --remove-label "$lbl" 2>/dev/null || true
+      done
+    }
+
+    # Helper: add a label, creating it on the repo first if needed
+    add_breeze_label() {
+      local num="$1" repo="$2" label="$3" color="$4" desc="$5"
+      gh issue edit "$num" --repo "$repo" --add-label "$label" 2>/dev/null || {
+        gh label create "$label" --repo "$repo" --color "$color" --description "$desc" --force 2>/dev/null || true
+        gh issue edit "$num" --repo "$repo" --add-label "$label" 2>/dev/null || true
+      }
+    }
+
     # Determine label to add
     case "$NEW_STATUS" in
       new)
-        # Remove all breeze labels (no label = new)
-        gh issue edit "$NUMBER" --repo "$REPO" --remove-label "$BREEZE_LABELS" 2>/dev/null || true
+        remove_breeze_labels "$NUMBER" "$REPO"
         ;;
       wip)
-        gh issue edit "$NUMBER" --repo "$REPO" --remove-label "$BREEZE_LABELS" 2>/dev/null || true
-        gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:wip" 2>/dev/null || {
-          # Label might not exist yet, create it
-          gh label create "breeze:wip" --repo "$REPO" --color "e4e669" --description "Breeze: work in progress" --force 2>/dev/null || true
-          gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:wip" 2>/dev/null || true
-        }
+        remove_breeze_labels "$NUMBER" "$REPO"
+        add_breeze_label "$NUMBER" "$REPO" "breeze:wip" "e4e669" "Breeze: work in progress"
         ;;
       human)
-        gh issue edit "$NUMBER" --repo "$REPO" --remove-label "$BREEZE_LABELS" 2>/dev/null || true
-        gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:human" 2>/dev/null || {
-          gh label create "breeze:human" --repo "$REPO" --color "d93f0b" --description "Breeze: needs human attention" --force 2>/dev/null || true
-          gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:human" 2>/dev/null || true
-        }
+        remove_breeze_labels "$NUMBER" "$REPO"
+        add_breeze_label "$NUMBER" "$REPO" "breeze:human" "d93f0b" "Breeze: needs human attention"
         ;;
-      done)
-        gh issue edit "$NUMBER" --repo "$REPO" --remove-label "$BREEZE_LABELS" 2>/dev/null || true
-        gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:done" 2>/dev/null || {
-          gh label create "breeze:done" --repo "$REPO" --color "0e8a16" --description "Breeze: handled" --force 2>/dev/null || true
-          gh issue edit "$NUMBER" --repo "$REPO" --add-label "breeze:done" 2>/dev/null || true
-        }
+      "done")
+        remove_breeze_labels "$NUMBER" "$REPO"
+        add_breeze_label "$NUMBER" "$REPO" "breeze:done" "0e8a16" "Breeze: handled"
         ;;
       *)
         echo "ERROR: unknown status '$NEW_STATUS'. Use: new, wip, human, done" >&2
