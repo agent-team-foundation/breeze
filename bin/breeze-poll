@@ -131,7 +131,7 @@ mv "$INBOX_TMP" "$INBOX"
 if [ -n "$NEW_NOTIFS" ]; then
   while IFS= read -r NID; do
     [ -z "$NID" ] && continue
-    jq -r --arg id "$NID" --arg ts "$POLL_TS" \
+    jq -c --arg id "$NID" --arg ts "$POLL_TS" \
       '.notifications[] | select(.id == $id) | {ts: $ts, event: "new", id: .id, type: .type, repo: .repo, title: .title, url: .html_url}' \
       "$INBOX" 2>/dev/null >> "$LOG_FILE"
   done <<< "$NEW_NOTIFS"

@@ -173,8 +173,8 @@ print_header
 
 # Show last 30 lines of history (reduced from 50 for cleaner start)
 if [ -s "$LOG_FILE" ]; then
-  tail -30 "$LOG_FILE" | while IFS= read -r line; do
-    [ -n "$line" ] && format_line "$line"
+  grep -E '^\{.*\}$' "$LOG_FILE" | tail -30 | while IFS= read -r line; do
+    format_line "$line"
   done
   echo ""
   printf "  ${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RESET} ${DIM}live${RESET} ${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RAINBOW[0]}─${RAINBOW[1]}─${RAINBOW[2]}─${RAINBOW[3]}─${RAINBOW[4]}─${RAINBOW[5]}─${RAINBOW[6]}─${RESET}\n"
@@ -183,5 +183,6 @@ fi
 
 # Stream new events
 tail -f "$LOG_FILE" 2>/dev/null | while IFS= read -r line || true; do
-  [ -n "${line:-}" ] && format_line "$line"
+  # Only process valid single-line JSON objects
+  [[ "${line:-}" == \{*\} ]] && format_line "$line"
 done
