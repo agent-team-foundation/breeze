@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# breeze-status — reads inbox.json and outputs a one-line statusline summary
-# Rings terminal bell when a new poll brings more notifications
+# breeze-status — statusline output based on breeze's own status system
+# Only counts "open" notifications (not claimed/pending/snoozed/resolved)
 set -euo pipefail
 
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
 INBOX="$BREEZE_DIR/inbox.json"
+STATUS_FILE="$BREEZE_DIR/status.json"
 BELL_STATE="$BREEZE_DIR/.bell_state"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Pass through stdin (Claude Code sends session JSON)
+# Pass through stdin
 cat > /dev/null
 
 # If no inbox file, show nothing
@@ -27,40 +29,22 @@ if [ "$FILE_AGE" -gt 600 ]; then
   exit 0
 fi
 
-# Read current state from inbox (single jq call)
-CURRENT=$(jq -r '
-  {
-    count: (.notifications | length),
-    poll: .last_poll
-  } | "\(.count) \(.poll)"
-' "$INBOX" 2>/dev/null) || exit 0
+# Initialize status.json if missing
+[ -f "$STATUS_FILE" ] || echo '{}' > "$STATUS_FILE"
 
-CURRENT_COUNT=$(echo "$CURRENT" | cut -d' ' -f1)
-CURRENT_POLL=$(echo "$CURRENT" | cut -d' ' -f2)
+# Count open notifications: total in inbox minus those with non-open status
+# This is the single source of truth — same file, same number, every terminal
+CURRENT_POLL=$(jq -r '.last_poll' "$INBOX" 2>/dev/null || echo "")
 
-# Bell logic: ring once per new poll that increased the count
-# bell_state stores "last_poll_ts last_count"
-NEW_SUFFIX=""
-if [ -f "$BELL_STATE" ]; then
-  PREV_POLL=$(cut -d' ' -f1 "$BELL_STATE" 2>/dev/null || echo "")
-  PREV_COUNT=$(cut -d' ' -f2 "$BELL_STATE" 2>/dev/null || echo "0")
-
-  if [ "$CURRENT_POLL" != "$PREV_POLL" ] && [ "$CURRENT_COUNT" -gt "$PREV_COUNT" ]; then
-    NEW_DIFF=$(( CURRENT_COUNT - PREV_COUNT ))
-    NEW_SUFFIX=" (+$NEW_DIFF new)"
-    printf '\a'
-  fi
-fi
-
-# Update bell state (all terminals read the same file, same answer)
-echo "$CURRENT_POLL $CURRENT_COUNT" > "$BELL_STATE"
-
-# Build summary
-SUMMARY=$(jq -r '
-  .notifications
+SUMMARY=$(jq -r --slurpfile status "$STATUS_FILE" '
+  [.notifications[] | select(
+    ($status[0][.id].status // "open") == "open"
+  )]
   | if length == 0 then ""
     else
-      group_by(.type)
+      . as $open |
+      ($open | length) as $total |
+      ($open | group_by(.type)
       | map({type: .[0].type, count: length})
       | sort_by(-.count)
       | map(
@@ -72,9 +56,28 @@ SUMMARY=$(jq -r '
           else "\(.count) \(.type)"
           end
         )
-      | "/breeze: " + join(" · ")
+      | "/breeze: " + join(" · "))
     end
 ' "$INBOX" 2>/dev/null)
+
+OPEN_COUNT=$(jq --slurpfile status "$STATUS_FILE" '
+  [.notifications[] | select(($status[0][.id].status // "open") == "open")] | length
+' "$INBOX" 2>/dev/null || echo "0")
+
+# Bell logic: ring once per new poll that increased the open count
+NEW_SUFFIX=""
+if [ -f "$BELL_STATE" ]; then
+  PREV_POLL=$(cut -d' ' -f1 "$BELL_STATE" 2>/dev/null || echo "")
+  PREV_COUNT=$(cut -d' ' -f2 "$BELL_STATE" 2>/dev/null || echo "0")
+
+  if [ "$CURRENT_POLL" != "$PREV_POLL" ] && [ "$OPEN_COUNT" -gt "$PREV_COUNT" ]; then
+    NEW_DIFF=$(( OPEN_COUNT - PREV_COUNT ))
+    NEW_SUFFIX=" (+$NEW_DIFF new)"
+    printf '\a'
+  fi
+fi
+
+echo "$CURRENT_POLL $OPEN_COUNT" > "$BELL_STATE"
 
 if [ -n "$SUMMARY" ]; then
   echo "${SUMMARY}${NEW_SUFFIX}"

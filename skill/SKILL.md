@@ -20,13 +20,16 @@ allowed-tools:
 
 You help the user manage their GitHub notifications from inside Claude Code.
 You can read their inbox, summarize notifications, suggest actions, and execute
-them via the `gh` CLI.
+them via the `gh` CLI. You track notification status using breeze's own 5-state
+system (open, claimed, pending, snoozed, resolved).
 
 ## Setup Check
 
 ```bash
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
 INBOX="$BREEZE_DIR/inbox.json"
+STATUS_MGR=$(find ~/.claude/skills -name breeze-status-manager -type f 2>/dev/null | head -1)
+[ -z "$STATUS_MGR" ] && STATUS_MGR=$(find ~/breeze-demo -name breeze-status-manager -type f 2>/dev/null | head -1)
 
 # Check gh auth
 if ! gh auth status &>/dev/null; then
@@ -43,68 +46,130 @@ if [ -f "$INBOX" ]; then
 else
   echo "NO_INBOX"
 fi
+
+# Check status manager
+if [ -n "$STATUS_MGR" ] && [ -x "$STATUS_MGR" ]; then
+  OPEN=$("$STATUS_MGR" count --status open)
+  CLAIMED=$("$STATUS_MGR" count --status claimed)
+  PENDING=$("$STATUS_MGR" count --status pending)
+  SNOOZED=$("$STATUS_MGR" count --status snoozed)
+  RESOLVED=$("$STATUS_MGR" count --status resolved)
+  echo "STATUS: $OPEN open · $CLAIMED claimed · $PENDING pending · $SNOOZED snoozed · $RESOLVED resolved"
+  echo "STATUS_MGR: $STATUS_MGR"
+else
+  echo "NO_STATUS_MGR"
+fi
 ```
 
 If `AUTH_NEEDED`: Tell the user "breeze requires GitHub CLI authentication. Run `gh auth login` first." and stop.
 
-If `NO_INBOX`: The poller hasn't run yet. Offer to fetch notifications on-demand:
-"No inbox file found. The breeze poller may not be running. Want me to fetch your notifications now?"
-If yes, run the poller inline:
+If `NO_INBOX`: Offer to fetch notifications on-demand:
 ```bash
 BREEZE_POLL=$(find ~/.claude/skills -name breeze-poll -type f 2>/dev/null | head -1)
 [ -z "$BREEZE_POLL" ] && BREEZE_POLL=$(find ~/breeze-demo -name breeze-poll -type f 2>/dev/null | head -1)
 [ -n "$BREEZE_POLL" ] && bash "$BREEZE_POLL" || echo "Could not find breeze-poll script"
 ```
 
-## Show Inbox
+## Show Inbox Dashboard
 
-Read the inbox and present a numbered list:
+Present a dashboard grouped by project (repo), showing only OPEN notifications:
 
 ```bash
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
-jq -r '
-  .notifications
-  | to_entries
-  | map(
-      "\(.key + 1). [\(.value.type)] \(.value.repo) — \(.value.title)"
-      + " (\(.value.reason), \(.value.updated_at | split("T")[0]))"
-      + "\n   \(.value.html_url)"
-    )
-  | join("\n")
+STATUS_FILE="$BREEZE_DIR/status.json"
+[ -f "$STATUS_FILE" ] || echo '{}' > "$STATUS_FILE"
+
+jq -r --slurpfile status "$STATUS_FILE" '
+  [.notifications[] | select(($status[0][.id].status // "open") == "open")]
+  | group_by(.repo)
+  | map({
+      repo: .[0].repo,
+      items: [.[] | {id: .id, type: .type, title: .title, reason: .reason, number: .number, html_url: .html_url, updated_at: .updated_at}]
+    })
+  | sort_by(-.items | length)
+  | .[]
+  | "\n## \(.repo) (\(.items | length))\n" +
+    ([.items | to_entries[] |
+      "  \(.key + 1). [\(.value.type)] \(.value.title) (\(.value.reason))\n     \(.value.html_url)"
+    ] | join("\n"))
 ' "$BREEZE_DIR/inbox.json" 2>/dev/null
 ```
 
-Present this list to the user. Each notification shows:
-- Number for selection
-- Type (PullRequest, Issue, Discussion)
-- Repo name
-- Title
-- Reason (review_requested, mention, assign, etc.)
-- Date
-- Clickable GitHub link
+Present the dashboard like this:
 
-Ask: "Pick a number to dive in, or tell me what you want to focus on (e.g. 'show PRs only', 'show review requests')."
+```
+/breeze inbox — 15 open · 3 claimed · 5 pending · 1 snoozed
+
+## serenakeyitan/paperclip-tree (10)
+  1. [PR] feat: add OAuth support (review_requested)
+     https://github.com/serenakeyitan/paperclip-tree/pull/305
+  2. [PR] fix: remove hardcoded JWT secret (author)
+     https://github.com/serenakeyitan/paperclip-tree/pull/227
+  ...
+
+## agent-team-foundation/first-tree (3)
+  1. [Issue] bug: extractOwnersFromCodeowners (mention)
+     https://github.com/agent-team-foundation/first-tree/issues/90
+  2. [PR] sync: update NODE.md schema (author)
+     https://github.com/agent-team-foundation/first-tree/pull/85
+
+## paperclipai/paperclip (2)
+  1. [Issue] feature request: dark mode (participating)
+     https://github.com/paperclipai/paperclip/issues/3100
+```
+
+After showing the dashboard, ask: "Pick a number from any project to dive in, or tell me what you want to do (e.g. 'show pending', 'resolve all paperclip-tree PRs', 'snooze #3 for 2 days')."
+
+## Status Commands
+
+The user can change notification status with natural language:
+
+- **"resolve #3"** or **"mark #3 as done"** → set to resolved
+- **"snooze #5 for 3 days"** → set to snoozed with snooze_until
+- **"skip #2"** or **"I'll deal with #2 later"** → snooze for 24h
+- **"show pending"** → list pending notifications
+- **"show resolved"** → list recently resolved (last 7 days)
+- **"show all"** → show all statuses
+
+To change status, use the status manager:
+```bash
+# Resolve
+$STATUS_MGR set <notification-id> resolved --by "human" --reason "Approved PR"
+
+# Snooze for 3 days
+SNOOZE_UNTIL=$(date -v+3d -u +%Y-%m-%dT%H:%M:%SZ)
+$STATUS_MGR set <notification-id> snoozed --by "human" --snooze-until "$SNOOZE_UNTIL"
+
+# Mark as pending (waiting on someone)
+$STATUS_MGR set <notification-id> pending --by "human" --reason "Waiting for author to add tests"
+```
 
 ## Dive Into a Notification
 
-When the user picks a notification, load the full context on-demand.
+When the user picks a notification:
 
-For **PullRequest** notifications:
+1. **Claim it** (prevents other agents from working on it simultaneously):
 ```bash
-# Substitute OWNER, REPO, NUMBER from the selected notification
+SESSION_ID="claude-$$-$(date +%s)"
+$STATUS_MGR claim <notification-id> "$SESSION_ID" "reviewing"
+```
+
+2. **Load full context on-demand:**
+
+For **PullRequest**:
+```bash
 gh pr view NUMBER --repo OWNER/REPO --json title,body,author,state,additions,deletions,files,reviews,comments,labels,url
 gh pr diff NUMBER --repo OWNER/REPO | head -500
 ```
 
-For **Issue** notifications:
+For **Issue**:
 ```bash
 gh issue view NUMBER --repo OWNER/REPO --json title,body,author,state,comments,labels,url
 gh api repos/OWNER/REPO/issues/NUMBER/comments --jq '.[].body' | head -200
 ```
 
-For **Discussion** notifications:
+For **Discussion**:
 ```bash
-# GitHub Discussions use the GraphQL API
 gh api graphql -f query='
   query {
     repository(owner: "OWNER", name: "REPO") {
@@ -126,44 +191,61 @@ gh api graphql -f query='
 '
 ```
 
-If the discussion number is not available from the notification URL, fall back to:
+3. **Summarize** the situation in 3-5 sentences
+4. **Suggest an action** with confidence level
+5. **Release the claim** after action completes:
 ```bash
-gh api "/notifications/threads/THREAD_ID" --jq '.subject.url'
+$STATUS_MGR release <notification-id>
 ```
 
-For **other types** (Release, CheckSuite, etc.):
-```bash
-gh api "/notifications/threads/THREAD_ID" --jq '{type: .subject.type, title: .subject.title, url: .subject.url, reason: .reason}'
-```
+## Agent Confidence Model
 
-After loading context, **summarize** the situation in 3-5 sentences:
-- What's happening (PR change summary, issue description, discussion topic, comment thread)
-- Who's involved and what they're asking
-- What action seems needed
+When suggesting an action, assess your confidence:
 
-Then **suggest an action**:
-- "This looks like a straightforward docs fix. Suggest: approve and merge."
-- "The reviewer is asking for test coverage on the new endpoint. Suggest: comment acknowledging and ask for a timeline."
-- "This issue is a duplicate of #42. Suggest: close with a link to the original."
-- "This discussion is an RFC asking for feedback on API versioning. Suggest: comment with your position."
+**HIGH (>80%)** — Act and show a review card:
+- Docs-only PR, typo fix, dependency bump from trusted source
+- Duplicate issue (exact match found)
+- Bot-generated PR that follows a known pattern
+- Show: "HANDLED: [action]. Confidence: X%. [Undo] [View on GitHub]"
+- Set status to resolved
+
+**MEDIUM (40-80%)** — Suggest and wait for human:
+- Code change PR that looks reasonable but touches important areas
+- Issue that could be closed but might have nuance
+- Show: "SUGGESTION: [action]. Confidence: X%. [Approve] [Override] [Skip]"
+- Keep status as open (human decides)
+
+**LOW (<40%)** — Escalate:
+- Security-related changes, breaking changes, architectural decisions
+- Contentious issues, unclear requirements
+- Show: "ESCALATION: I'm not sure about this. [full context]. [Take over] [Snooze]"
+- Keep status as open
 
 ## Execute Actions
 
-When the user tells you what to do, translate to `gh` CLI commands.
+When the user approves an action, translate to `gh` CLI:
 
 **Safe actions (execute with confirmation):**
-- Comment on issue/PR: `gh issue comment NUMBER --repo OWNER/REPO --body "MESSAGE"`
+- Comment: `gh issue comment NUMBER --repo OWNER/REPO --body "MESSAGE"`
 - Comment on discussion: `gh api graphql -f query='mutation { addDiscussionComment(input: {discussionId: "ID", body: "MESSAGE"}) { comment { id } } }'`
 - Approve PR: `gh pr review NUMBER --repo OWNER/REPO --approve --body "MESSAGE"`
 - Request changes: `gh pr review NUMBER --repo OWNER/REPO --request-changes --body "MESSAGE"`
 - Close issue: `gh issue close NUMBER --repo OWNER/REPO --comment "MESSAGE"`
-- React with emoji: `gh api repos/OWNER/REPO/issues/NUMBER/reactions -f content=EMOJI`
+- React: `gh api repos/OWNER/REPO/issues/NUMBER/reactions -f content=EMOJI`
 - Label: `gh issue edit NUMBER --repo OWNER/REPO --add-label "LABEL"`
 
 **Destructive actions (require explicit confirmation + warning):**
 - Merge PR: `gh pr merge NUMBER --repo OWNER/REPO`
 - Delete branch: warn that this is destructive
-- Force push: refuse unless user insists
+
+**After executing:** Update status:
+```bash
+# If action fully resolves it (approved, closed, merged)
+$STATUS_MGR set <notification-id> resolved --by "$SESSION_ID" --reason "Approved PR #NUMBER"
+
+# If action needs follow-up (requested changes, asked a question)
+$STATUS_MGR set <notification-id> pending --by "$SESSION_ID" --reason "Requested changes, waiting for author"
+```
 
 **Footer:** Append to every comment/review body:
 ```
@@ -171,22 +253,21 @@ When the user tells you what to do, translate to `gh` CLI commands.
 _sent via [breeze](https://github.com/agent-team-foundation/breeze-demo) on behalf of @USERNAME_
 ```
 
-Get the username:
-```bash
-gh api user --jq '.login'
-```
+Get username: `gh api user --jq '.login'`
 
 Always show the exact command before executing. Wait for user confirmation.
 
 ## Bulk Actions
 
-If the user wants to handle multiple notifications:
-- "Show only PRs": filter the inbox list by type
-- "Show only review requests": filter by reason
+- "resolve all docs PRs" → find PRs with docs-only changes, resolve them
+- "show only paperclip-tree" → filter by repo
+- "show only review requests" → filter by reason
+- "snooze everything from bot-name" → snooze by author pattern
 
 ## Tips
 
-- Links in the notification list are clickable in most terminals
-- The user can say things like "approve the first 3 PRs" or "close all stale issues"
-- If the user asks about a repo not in their notifications, use `gh` to look it up directly
-- Discussions use GitHub's GraphQL API which requires the `read:discussion` scope on the gh token
+- Links are clickable in most terminals
+- Notifications are grouped by project (repo) for easy scanning
+- The statusline only counts open items — resolving/snoozing shrinks the number
+- The number is stable across terminals because it's based on YOUR status, not GitHub's read/unread
+- Discussions use GitHub's GraphQL API which requires `read:discussion` scope

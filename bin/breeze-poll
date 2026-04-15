@@ -44,7 +44,7 @@ if [ -f "$CONFIG" ]; then
 fi
 
 # Step 1: Fetch raw notifications to a temp file (avoids shell quoting issues)
-gh api /notifications --paginate > "$RAW_TMP" 2>/dev/null || {
+gh api '/notifications?all=true' --paginate > "$RAW_TMP" 2>/dev/null || {
   echo "WARN: GitHub API failed, skipping" >&2
   rm -f "$RAW_TMP"
   exit 0
@@ -115,6 +115,13 @@ jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 
 mv "$INBOX_TMP" "$INBOX"
 rm -f "$RAW_TMP" "$BREEZE_DIR/.enriched.json"
+
+# Step 5: Run state machine transitions (reopen resolved/pending/snoozed on new activity)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -x "$SCRIPT_DIR/breeze-status-manager" ]; then
+  "$SCRIPT_DIR/breeze-status-manager" transitions 2>/dev/null || true
+  "$SCRIPT_DIR/breeze-status-manager" gc 2>/dev/null || true
+fi
 
 COUNT=$(jq '.notifications | length' "$INBOX")
 echo "breeze: polled $(date -u +%H:%M:%S) — $COUNT notifications"

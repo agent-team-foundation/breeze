@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+# breeze-status-manager — manages the 5-state notification status system
+# States: open (default), claimed, pending, snoozed, resolved
+#
+# Usage:
+#   breeze-status-manager get <notification-id>       → prints current status
+#   breeze-status-manager set <notification-id> <status> [--by <session-id>] [--reason <text>] [--snooze-until <iso-ts>]
+#   breeze-status-manager claim <notification-id> <session-id> [--action <text>]
+#   breeze-status-manager release <notification-id>
+#   breeze-status-manager list [--status <status>]    → prints notification IDs with given status
+#   breeze-status-manager count [--status <status>]   → prints count
+#   breeze-status-manager transitions                 → run state machine (called by poller)
+#   breeze-status-manager gc                          → garbage collect old resolved entries
+set -euo pipefail
+
+BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
+STATUS_FILE="$BREEZE_DIR/status.json"
+STATUS_TMP="$BREEZE_DIR/status.json.tmp"
+CLAIMS_DIR="$BREEZE_DIR/claims"
+INBOX="$BREEZE_DIR/inbox.json"
+CLAIM_TIMEOUT=300  # 5 minutes in seconds
+
+mkdir -p "$BREEZE_DIR" "$CLAIMS_DIR"
+
+# Initialize status.json if missing
+if [ ! -f "$STATUS_FILE" ]; then
+  echo '{}' > "$STATUS_FILE"
+fi
+
+CMD="${1:-help}"
+shift || true
+
+case "$CMD" in
+  get)
+    NOTIF_ID="$1"
+    # Check claim first
+    if [ -d "$CLAIMS_DIR/$NOTIF_ID" ] && [ -f "$CLAIMS_DIR/$NOTIF_ID/claimed_at" ]; then
+      CLAIMED_AT=$(cat "$CLAIMS_DIR/$NOTIF_ID/claimed_at")
+      CLAIMED_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$CLAIMED_AT" +%s 2>/dev/null || date -d "$CLAIMED_AT" +%s 2>/dev/null || echo "0")
+      NOW=$(date +%s)
+      if [ $(( NOW - CLAIMED_TS )) -lt $CLAIM_TIMEOUT ]; then
+        echo "claimed"
+        exit 0
+      fi
+    fi
+    # Check status.json
+    STATUS=$(jq -r --arg id "$NOTIF_ID" '.[$id].status // "open"' "$STATUS_FILE" 2>/dev/null)
+    echo "$STATUS"
+    ;;
+
+  set)
+    NOTIF_ID="$1"; shift
+    NEW_STATUS="$1"; shift
+    SESSION_ID=""
+    REASON=""
+    SNOOZE_UNTIL="null"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --by) SESSION_ID="$2"; shift 2 ;;
+        --reason) REASON="$2"; shift 2 ;;
+        --snooze-until) SNOOZE_UNTIL="\"$2\""; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    # Get current github_updated_at from inbox
+    GH_UPDATED=$(jq -r --arg id "$NOTIF_ID" '.notifications[] | select(.id == $id) | .updated_at // ""' "$INBOX" 2>/dev/null || echo "")
+    NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    jq --arg id "$NOTIF_ID" \
+       --arg status "$NEW_STATUS" \
+       --arg changed_at "$NOW" \
+       --arg changed_by "$SESSION_ID" \
+       --arg reason "$REASON" \
+       --argjson snooze_until "$SNOOZE_UNTIL" \
+       --arg gh_updated "$GH_UPDATED" \
+       '.[$id] = {status: $status, changed_at: $changed_at, changed_by: $changed_by, reason: $reason, snooze_until: $snooze_until, github_updated_at: $gh_updated}' \
+       "$STATUS_FILE" > "$STATUS_TMP" && mv "$STATUS_TMP" "$STATUS_FILE"
+    # Clean up claim if resolving/pending/snoozed
+    if [ "$NEW_STATUS" != "claimed" ]; then
+      rm -rf "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null || true
+    fi
+    echo "$NEW_STATUS"
+    ;;
+
+  claim)
+    NOTIF_ID="$1"; shift
+    SESSION_ID="$1"; shift
+    ACTION="${1:-working}"
+    # Atomic claim via mkdir
+    if mkdir "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null; then
+      echo "$SESSION_ID" > "$CLAIMS_DIR/$NOTIF_ID/claimed_by"
+      date -u +%Y-%m-%dT%H:%M:%SZ > "$CLAIMS_DIR/$NOTIF_ID/claimed_at"
+      echo "$ACTION" > "$CLAIMS_DIR/$NOTIF_ID/action"
+      echo "claimed"
+    else
+      # Check if existing claim has timed out
+      if [ -f "$CLAIMS_DIR/$NOTIF_ID/claimed_at" ]; then
+        CLAIMED_AT=$(cat "$CLAIMS_DIR/$NOTIF_ID/claimed_at")
+        CLAIMED_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$CLAIMED_AT" +%s 2>/dev/null || date -d "$CLAIMED_AT" +%s 2>/dev/null || echo "0")
+        NOW=$(date +%s)
+        if [ $(( NOW - CLAIMED_TS )) -ge $CLAIM_TIMEOUT ]; then
+          # Timed out, reclaim
+          echo "$SESSION_ID" > "$CLAIMS_DIR/$NOTIF_ID/claimed_by"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$CLAIMS_DIR/$NOTIF_ID/claimed_at"
+          echo "$ACTION" > "$CLAIMS_DIR/$NOTIF_ID/action"
+          echo "claimed"
+        else
+          OWNER=$(cat "$CLAIMS_DIR/$NOTIF_ID/claimed_by" 2>/dev/null || echo "unknown")
+          echo "already_claimed:$OWNER"
+        fi
+      else
+        # Stale claim dir without metadata, reclaim
+        echo "$SESSION_ID" > "$CLAIMS_DIR/$NOTIF_ID/claimed_by"
+        date -u +%Y-%m-%dT%H:%M:%SZ > "$CLAIMS_DIR/$NOTIF_ID/claimed_at"
+        echo "$ACTION" > "$CLAIMS_DIR/$NOTIF_ID/action"
+        echo "claimed"
+      fi
+    fi
+    ;;
+
+  release)
+    NOTIF_ID="$1"
+    rm -rf "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null || true
+    echo "released"
+    ;;
+
+  list)
+    FILTER_STATUS="open"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --status) FILTER_STATUS="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [ "$FILTER_STATUS" = "open" ]; then
+      # Open = in inbox but NOT in status.json (or status is "open")
+      # Also exclude active claims
+      ACTIVE_CLAIMS=$(ls "$CLAIMS_DIR" 2>/dev/null | tr '\n' '|' | sed 's/|$//')
+      jq -r --arg active "$ACTIVE_CLAIMS" '
+        . as $status |
+        input | .notifications[] |
+        select(
+          ($status[.id].status // "open") == "open"
+          and (if $active == "" then true else (.id | test($active) | not) end)
+        ) | .id
+      ' "$STATUS_FILE" "$INBOX" 2>/dev/null || true
+    else
+      jq -r --arg s "$FILTER_STATUS" 'to_entries[] | select(.value.status == $s) | .key' "$STATUS_FILE" 2>/dev/null
+    fi
+    ;;
+
+  count)
+    FILTER_STATUS="open"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --status) FILTER_STATUS="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [ "$FILTER_STATUS" = "open" ]; then
+      # Count: total in inbox minus (claimed + pending + snoozed + resolved)
+      TOTAL=$(jq '.notifications | length' "$INBOX" 2>/dev/null || echo "0")
+      NON_OPEN=$(jq '[to_entries[] | select(.value.status != "open")] | length' "$STATUS_FILE" 2>/dev/null || echo "0")
+      # Count active claims not already in status.json
+      ACTIVE_CLAIM_COUNT=0
+      for claim_dir in "$CLAIMS_DIR"/*/; do
+        [ -d "$claim_dir" ] || continue
+        CLAIM_ID=$(basename "$claim_dir")
+        if [ -f "$claim_dir/claimed_at" ]; then
+          CLAIMED_AT=$(cat "$claim_dir/claimed_at")
+          CLAIMED_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$CLAIMED_AT" +%s 2>/dev/null || date -d "$CLAIMED_AT" +%s 2>/dev/null || echo "0")
+          NOW=$(date +%s)
+          if [ $(( NOW - CLAIMED_TS )) -lt $CLAIM_TIMEOUT ]; then
+            ACTIVE_CLAIM_COUNT=$(( ACTIVE_CLAIM_COUNT + 1 ))
+          fi
+        fi
+      done
+      echo $(( TOTAL - NON_OPEN - ACTIVE_CLAIM_COUNT ))
+    else
+      jq --arg s "$FILTER_STATUS" '[to_entries[] | select(.value.status == $s)] | length' "$STATUS_FILE" 2>/dev/null || echo "0"
+    fi
+    ;;
+
+  transitions)
+    # State machine: detect new GitHub activity and transition statuses
+    # Called by the poller after writing inbox.json
+    CHANGED=0
+    jq -r 'to_entries[] | "\(.key) \(.value.status) \(.value.github_updated_at // "") \(.value.snooze_until // "")"' "$STATUS_FILE" 2>/dev/null | \
+    while IFS=' ' read -r NOTIF_ID STATUS OLD_GH_UPDATED SNOOZE_UNTIL; do
+      [ -z "$NOTIF_ID" ] && continue
+
+      # Get current github updated_at from inbox
+      CURRENT_GH_UPDATED=$(jq -r --arg id "$NOTIF_ID" '.notifications[] | select(.id == $id) | .updated_at // ""' "$INBOX" 2>/dev/null || echo "")
+
+      TRANSITION=""
+
+      case "$STATUS" in
+        resolved|pending)
+          # Reopen if new activity on GitHub
+          if [ -n "$CURRENT_GH_UPDATED" ] && [ -n "$OLD_GH_UPDATED" ] && [ "$CURRENT_GH_UPDATED" != "$OLD_GH_UPDATED" ]; then
+            TRANSITION="open"
+          fi
+          ;;
+        snoozed)
+          # Reopen if new activity OR snooze timer expired
+          if [ -n "$CURRENT_GH_UPDATED" ] && [ -n "$OLD_GH_UPDATED" ] && [ "$CURRENT_GH_UPDATED" != "$OLD_GH_UPDATED" ]; then
+            TRANSITION="open"
+          elif [ -n "$SNOOZE_UNTIL" ] && [ "$SNOOZE_UNTIL" != "null" ]; then
+            SNOOZE_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$SNOOZE_UNTIL" +%s 2>/dev/null || date -d "$SNOOZE_UNTIL" +%s 2>/dev/null || echo "9999999999")
+            NOW=$(date +%s)
+            if [ "$NOW" -ge "$SNOOZE_TS" ]; then
+              TRANSITION="open"
+            fi
+          fi
+          ;;
+      esac
+
+      if [ -n "$TRANSITION" ]; then
+        # Transition to open = remove from status.json (open is the default)
+        jq --arg id "$NOTIF_ID" 'del(.[$id])' "$STATUS_FILE" > "$STATUS_TMP" && mv "$STATUS_TMP" "$STATUS_FILE"
+        CHANGED=$(( CHANGED + 1 ))
+        echo "transition: $NOTIF_ID $STATUS → $TRANSITION"
+      fi
+    done
+
+    # Clean up expired claims
+    for claim_dir in "$CLAIMS_DIR"/*/; do
+      [ -d "$claim_dir" ] || continue
+      if [ -f "$claim_dir/claimed_at" ]; then
+        CLAIMED_AT=$(cat "$claim_dir/claimed_at")
+        CLAIMED_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$CLAIMED_AT" +%s 2>/dev/null || date -d "$CLAIMED_AT" +%s 2>/dev/null || echo "0")
+        NOW=$(date +%s)
+        if [ $(( NOW - CLAIMED_TS )) -ge $CLAIM_TIMEOUT ]; then
+          CLAIM_ID=$(basename "$claim_dir")
+          rm -rf "$claim_dir"
+          echo "transition: $CLAIM_ID claimed → open (timeout)"
+        fi
+      fi
+    done
+    ;;
+
+  gc)
+    # Garbage collect: remove resolved entries older than 7 days
+    CUTOFF=$(date -v-7d -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -d "7 days ago" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    jq --arg cutoff "$CUTOFF" '
+      with_entries(select(
+        .value.status != "resolved" or .value.changed_at > $cutoff
+      ))
+    ' "$STATUS_FILE" > "$STATUS_TMP" && mv "$STATUS_TMP" "$STATUS_FILE"
+    # Remove orphan claims
+    for claim_dir in "$CLAIMS_DIR"/*/; do
+      [ -d "$claim_dir" ] || continue
+      CLAIM_ID=$(basename "$claim_dir")
+      EXISTS=$(jq -r --arg id "$CLAIM_ID" '.notifications[] | select(.id == $id) | .id' "$INBOX" 2>/dev/null || echo "")
+      if [ -z "$EXISTS" ]; then
+        rm -rf "$claim_dir"
+        echo "gc: removed orphan claim $CLAIM_ID"
+      fi
+    done
+    echo "gc: done"
+    ;;
+
+  help|*)
+    echo "Usage: breeze-status-manager <command> [args]"
+    echo "Commands: get, set, claim, release, list, count, transitions, gc"
+    ;;
+esac
