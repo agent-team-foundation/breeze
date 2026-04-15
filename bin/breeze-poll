@@ -40,7 +40,7 @@ gh api /notifications --paginate > "$RAW_TMP" 2>/dev/null || {
 
 # Step 2: Transform with jq (reading from file, not shell variable)
 jq '[
-  .[] | {
+  .[] | select(.subject.type != "CheckSuite" and .subject.type != "Commit") | {
     id: .id,
     type: .subject.type,
     reason: .reason,

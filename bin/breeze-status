@@ -57,6 +57,8 @@ SUMMARY=$(jq -r '
           if .type == "PullRequest" then "\(.count) PRs"
           elif .type == "Issue" then "\(.count) issues"
           elif .type == "Discussion" then "\(.count) discussions"
+          elif .type == "Release" then "\(.count) releases"
+          elif .type == "SecurityAlert" then "\(.count) security"
           else "\(.count) \(.type)"
           end
         )
