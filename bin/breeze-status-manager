@@ -230,14 +230,14 @@ case "$CMD" in
 
       case "$STATUS" in
         resolved|pending)
-          # Reopen if new activity on GitHub
-          if [ -n "$CURRENT_GH_UPDATED" ] && [ -n "$OLD_GH_UPDATED" ] && [ "$CURRENT_GH_UPDATED" != "$OLD_GH_UPDATED" ]; then
+          # Reopen only if GitHub updated_at is NEWER than when we set the status
+          if [ -n "$CURRENT_GH_UPDATED" ] && [ -n "$OLD_GH_UPDATED" ] && [ "$CURRENT_GH_UPDATED" \> "$OLD_GH_UPDATED" ]; then
             TRANSITION="open"
           fi
           ;;
         snoozed)
-          # Reopen if new activity OR snooze timer expired
-          if [ -n "$CURRENT_GH_UPDATED" ] && [ -n "$OLD_GH_UPDATED" ] && [ "$CURRENT_GH_UPDATED" != "$OLD_GH_UPDATED" ]; then
+          # Reopen if GitHub updated_at is NEWER OR snooze timer expired
+          if [ -n "$CURRENT_GH_UPDATED" ] && [ -n "$OLD_GH_UPDATED" ] && [ "$CURRENT_GH_UPDATED" \> "$OLD_GH_UPDATED" ]; then
             TRANSITION="open"
           elif [ -n "$SNOOZE_UNTIL" ] && [ "$SNOOZE_UNTIL" != "null" ]; then
             SNOOZE_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$SNOOZE_UNTIL" +%s 2>/dev/null || date -d "$SNOOZE_UNTIL" +%s 2>/dev/null || echo "9999999999")
