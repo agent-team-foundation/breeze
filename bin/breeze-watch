@@ -182,6 +182,6 @@ if [ -s "$LOG_FILE" ]; then
 fi
 
 # Stream new events
-tail -f "$LOG_FILE" 2>/dev/null | while IFS= read -r line; do
-  [ -n "$line" ] && format_line "$line"
+tail -f "$LOG_FILE" 2>/dev/null | while IFS= read -r line || true; do
+  [ -n "${line:-}" ] && format_line "$line"
 done
