@@ -12,6 +12,18 @@ CONFIG="$BREEZE_DIR/config.yaml"
 
 mkdir -p "$BREEZE_DIR"
 
+# Prevent concurrent runs (setup + launchd RunAtLoad can race)
+PIDFILE="$BREEZE_DIR/.poll.pid"
+if [ -f "$PIDFILE" ]; then
+  OLD_PID=$(cat "$PIDFILE" 2>/dev/null)
+  if kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "breeze: poller already running (pid $OLD_PID), skipping" >&2
+    exit 0
+  fi
+fi
+echo $$ > "$PIDFILE"
+trap 'rm -f "$PIDFILE"' EXIT
+
 # Check gh
 if ! command -v gh &>/dev/null; then
   echo "ERROR: gh not found" >&2
@@ -32,7 +44,7 @@ if [ -f "$CONFIG" ]; then
 fi
 
 # Step 1: Fetch raw notifications to a temp file (avoids shell quoting issues)
-gh api '/notifications?all=true' --paginate > "$RAW_TMP" 2>/dev/null || {
+gh api /notifications --paginate > "$RAW_TMP" 2>/dev/null || {
   echo "WARN: GitHub API failed, skipping" >&2
   rm -f "$RAW_TMP"
   exit 0
@@ -73,7 +85,7 @@ jq '[
       end
     )
   }
-] | sort_by(.priority, .updated_at) | reverse' "$RAW_TMP" > "$BREEZE_DIR/.enriched.json" 2>/dev/null || {
+] | unique_by(.id) | sort_by(.priority, .updated_at) | reverse' "$RAW_TMP" > "$BREEZE_DIR/.enriched.json" 2>/dev/null || {
   echo "WARN: jq transform failed" >&2
   rm -f "$RAW_TMP"
   exit 0

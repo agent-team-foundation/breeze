@@ -30,7 +30,7 @@ fi
 # Read current state from inbox (single jq call)
 CURRENT=$(jq -r '
   {
-    count: ([.notifications[] | select(.unread == true)] | length),
+    count: (.notifications | length),
     poll: .last_poll
   } | "\(.count) \(.poll)"
 ' "$INBOX" 2>/dev/null) || exit 0
@@ -57,7 +57,7 @@ echo "$CURRENT_POLL $CURRENT_COUNT" > "$BELL_STATE"
 
 # Build summary
 SUMMARY=$(jq -r '
-  [.notifications[] | select(.unread == true)]
+  .notifications
   | if length == 0 then ""
     else
       group_by(.type)
