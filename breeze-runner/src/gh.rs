@@ -51,6 +51,10 @@ impl GhClient {
         }
     }
 
+    pub fn executor(&self) -> &GhExecutor {
+        &self.executor
+    }
+
     pub fn recent_notifications(
         &self,
         now_epoch: u64,

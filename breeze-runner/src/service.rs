@@ -204,6 +204,28 @@ impl Service {
         Ok(())
     }
 
+    pub fn poll_inbox(&mut self) -> AppResult<()> {
+        let inbox_dir = crate::fetcher::resolve_inbox_dir()?;
+        let fetcher = crate::fetcher::Fetcher::new(
+            self.gh.executor().clone(),
+            self.identity.host.clone(),
+            inbox_dir.clone(),
+            self.config.repo_filter.clone(),
+        );
+        let outcome = fetcher.poll_once()?;
+        for warning in &outcome.warnings {
+            eprintln!("breeze: warn: {warning}");
+        }
+        let _ = crate::fetcher::cleanup_expired_claims(&inbox_dir.join("claims"), 300);
+        println!(
+            "breeze: polled — {total} notifications ({new_count} new) — {path}",
+            total = outcome.total,
+            new_count = outcome.new_count,
+            path = fetcher.inbox_path().display()
+        );
+        Ok(())
+    }
+
     pub fn stop(&mut self) -> AppResult<()> {
         if cfg!(target_os = "macos") {
             let _ = self.stop_launchd_job();
