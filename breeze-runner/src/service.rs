@@ -3,6 +3,8 @@ use std::env;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -352,7 +354,52 @@ impl Service {
 
     pub fn run_forever(&mut self) -> AppResult<()> {
         self.acquire_lock()?;
-        self.run_loop(false)
+        let stop = self.spawn_inbox_poll_loop()?;
+        let result = self.run_loop(false);
+        stop.store(true, Ordering::Relaxed);
+        result
+    }
+
+    /// Spawn a background thread that refreshes `~/.breeze/inbox.json` on a
+    /// fixed cadence so TUI consumers (statusline, skill) always see fresh
+    /// data without an external launchd job. Returns a flag the caller flips
+    /// to request graceful shutdown.
+    fn spawn_inbox_poll_loop(&self) -> AppResult<Arc<AtomicBool>> {
+        let inbox_dir = crate::fetcher::resolve_inbox_dir()?;
+        let fetcher = crate::fetcher::Fetcher::new(
+            self.gh.executor().clone(),
+            self.identity.host.clone(),
+            inbox_dir.clone(),
+            self.config.repo_filter.clone(),
+        );
+        let interval = Duration::from_secs(self.config.inbox_poll_interval_secs.max(1));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_thread = stop.clone();
+        let claims_dir = inbox_dir.join("claims");
+        thread::spawn(move || {
+            while !stop_for_thread.load(Ordering::Relaxed) {
+                match fetcher.poll_once() {
+                    Ok(outcome) => {
+                        for warning in &outcome.warnings {
+                            eprintln!("breeze: inbox poll warning: {warning}");
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("breeze: inbox poll failed: {error}");
+                    }
+                }
+                let _ = crate::fetcher::cleanup_expired_claims(&claims_dir, 300);
+                let mut waited = Duration::from_secs(0);
+                while waited < interval {
+                    if stop_for_thread.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_secs(1));
+                    waited += Duration::from_secs(1);
+                }
+            }
+        });
+        Ok(stop)
     }
 
     fn acquire_lock(&mut self) -> AppResult<()> {

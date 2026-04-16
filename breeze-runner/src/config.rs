@@ -123,6 +123,7 @@ pub struct Config {
     pub runners: Vec<RunnerKind>,
     pub max_parallel: usize,
     pub poll_interval_secs: u64,
+    pub inbox_poll_interval_secs: u64,
     pub task_limit: usize,
     pub notification_lookback_secs: u64,
     pub search_reconcile_interval_secs: u64,
@@ -176,6 +177,8 @@ impl Config {
         )?;
         let mut max_parallel = parse_usize_env("BREEZE_MAX_PARALLEL").unwrap_or(20);
         let mut poll_interval_secs = parse_u64_env("BREEZE_POLL_INTERVAL_SECS").unwrap_or(600);
+        let mut inbox_poll_interval_secs =
+            parse_u64_env("BREEZE_INBOX_POLL_INTERVAL_SECS").unwrap_or(60);
         let mut task_limit = parse_usize_env("BREEZE_TASK_LIMIT").unwrap_or(100);
         let mut notification_lookback_secs =
             parse_u64_env("BREEZE_NOTIFICATION_LOOKBACK_SECS").unwrap_or(60 * 60 * 24);
@@ -216,6 +219,9 @@ impl Config {
                 }
                 "--max-parallel" => max_parallel = parse_usize(&next_value(&mut index)?)?,
                 "--poll-interval-secs" => poll_interval_secs = parse_u64(&next_value(&mut index)?)?,
+                "--inbox-poll-interval-secs" => {
+                    inbox_poll_interval_secs = parse_u64(&next_value(&mut index)?)?
+                }
                 "--task-limit" => task_limit = parse_usize(&next_value(&mut index)?)?,
                 "--notification-lookback-secs" => {
                     notification_lookback_secs = parse_u64(&next_value(&mut index)?)?
@@ -265,6 +271,11 @@ impl Config {
         if poll_interval_secs == 0 {
             return Err(app_error("--poll-interval-secs must be greater than zero"));
         }
+        if inbox_poll_interval_secs == 0 {
+            return Err(app_error(
+                "--inbox-poll-interval-secs must be greater than zero",
+            ));
+        }
         if workspace_ttl_secs == 0 {
             return Err(app_error("--workspace-ttl-secs must be greater than zero"));
         }
@@ -278,6 +289,7 @@ impl Config {
             runners,
             max_parallel,
             poll_interval_secs,
+            inbox_poll_interval_secs,
             task_limit,
             notification_lookback_secs,
             search_reconcile_interval_secs,
@@ -300,6 +312,7 @@ impl Config {
             runners: vec![RunnerKind::Codex, RunnerKind::Claude],
             max_parallel: 20,
             poll_interval_secs: 600,
+            inbox_poll_interval_secs: 60,
             task_limit: 100,
             notification_lookback_secs: 60 * 60 * 24,
             search_reconcile_interval_secs: 60 * 60 * 6,
@@ -338,7 +351,8 @@ FLAGS
   --allow-repo <patterns>        Restrict processing to owner/repo or owner/* patterns
   --runner <list>                Comma-separated runner order, e.g. codex,claude
   --max-parallel <n>             Max concurrent tasks (default: 20)
-  --poll-interval-secs <n>       Poll cadence in seconds (default: 600)
+  --poll-interval-secs <n>       Dispatch poll cadence in seconds (default: 600)
+  --inbox-poll-interval-secs <n> Inbox refresh cadence in seconds (default: 60)
   --task-limit <n>               Search result limit per source (default: 100)
   --notification-lookback-secs <n>
                                  Recent-thread window to reconsider every poll (default: 86400)
@@ -359,6 +373,7 @@ ENV
   BREEZE_RUNNERS
   BREEZE_MAX_PARALLEL
   BREEZE_POLL_INTERVAL_SECS
+  BREEZE_INBOX_POLL_INTERVAL_SECS
   BREEZE_TASK_LIMIT
   BREEZE_NOTIFICATION_LOOKBACK_SECS
   BREEZE_SEARCH_RECONCILE_INTERVAL_SECS
