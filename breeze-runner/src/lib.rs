@@ -1,9 +1,11 @@
 mod broker;
 mod classify;
 mod config;
+mod fetcher;
 mod gh;
 mod gh_executor;
 mod identity;
+mod json;
 mod lock;
 mod runner;
 mod service;
@@ -27,6 +29,7 @@ pub fn main_entry(args: Vec<String>) -> AppResult<()> {
         CommandKind::Status => service.status(),
         CommandKind::Cleanup => service.cleanup(),
         CommandKind::Stop => service.stop(),
+        CommandKind::Poll => service.poll_inbox(),
         CommandKind::Help => {
             println!("{}", Config::usage());
             Ok(())

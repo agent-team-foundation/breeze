@@ -12,6 +12,7 @@ pub enum CommandKind {
     Status,
     Cleanup,
     Stop,
+    Poll,
     Help,
 }
 
@@ -148,6 +149,7 @@ impl Config {
             Some("status") => (CommandKind::Status, iter.collect()),
             Some("cleanup") => (CommandKind::Cleanup, iter.collect()),
             Some("stop") => (CommandKind::Stop, iter.collect()),
+            Some("poll") => (CommandKind::Poll, iter.collect()),
             Some("help") | Some("--help") | Some("-h") => (CommandKind::Help, iter.collect()),
             Some(other) if other.starts_with('-') => {
                 let mut all = vec![other.to_string()];
@@ -326,6 +328,7 @@ COMMANDS
   status     Show the current service lock and last runtime heartbeat
   cleanup    Remove stale task workspaces
   stop       Stop the background service for the active gh identity
+  poll       Fetch notifications, enrich labels, and write ~/.breeze/inbox.json
   help       Show this help
 
 FLAGS
