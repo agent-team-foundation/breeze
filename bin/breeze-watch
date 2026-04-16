@@ -65,10 +65,21 @@ format_line() {
   local CMD=$(echo "$LINE" | jq -r '.command // ""' 2>/dev/null)
   local COUNT=$(echo "$LINE" | jq -r '.count // ""' 2>/dev/null)
 
-  # Format timestamp (show time only)
+  # Format timestamp (convert UTC to local time)
   local TIME=""
   if [ -n "$TS" ]; then
-    TIME=$(echo "$TS" | sed 's/.*T//' | sed 's/Z$//' | cut -c1-8)
+    # Extract UTC epoch, then format as local time
+    local UTC_TIME=$(echo "$TS" | sed 's/.*T//' | sed 's/Z$//' | cut -c1-8)
+    if [ "$(uname)" = "Darwin" ]; then
+      local EPOCH=$(date -juf "%Y-%m-%dT%H:%M:%SZ" "$TS" "+%s" 2>/dev/null)
+      if [ -n "$EPOCH" ]; then
+        TIME=$(date -jf "%s" "$EPOCH" "+%H:%M:%S" 2>/dev/null || echo "$UTC_TIME")
+      else
+        TIME="$UTC_TIME"
+      fi
+    else
+      TIME=$(date -d "$TS" "+%H:%M:%S" 2>/dev/null || echo "$UTC_TIME")
+    fi
   fi
 
   # Short repo name (drop owner prefix)
