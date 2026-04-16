@@ -91,6 +91,17 @@ format_line() {
   # Truncate title
   TITLE=$(truncate_title "$TITLE" 55)
 
+  # Build short clickable reference (repo#123) from URL
+  local SHORT_LINK=""
+  if [ -n "$URL" ]; then
+    local NUM=$(echo "$URL" | grep -oE '[0-9]+$' || true)
+    if [ -n "$NUM" ]; then
+      SHORT_LINK=$(link "$URL" "${SHORT_REPO}#${NUM}")
+    else
+      SHORT_LINK=$(link "$URL" "$SHORT_REPO")
+    fi
+  fi
+
   # Get rainbow color for this line
   local CLR
   CLR=$(rainbow)
@@ -98,38 +109,32 @@ format_line() {
   # Format by event type with rainbow colors
   case "$EVENT" in
     new)
-      printf "${DIM}%s${RESET}  ${CLR}▸ NEW${RESET}       ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
-      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
+      printf "${DIM}%s${RESET}  ${CLR}▸ NEW${RESET}       %s  %s\n" "$TIME" "$SHORT_LINK" "$TITLE"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     claimed)
-      printf "${DIM}%s${RESET}  ${CLR}⚡ CLAIM${RESET}     ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      printf "${DIM}%s${RESET}  ${CLR}⚡ CLAIM${RESET}     %s  %s\n" "$TIME" "$SHORT_LINK" "$TITLE"
       [ -n "$BY" ] && printf "              ${DIM}↳ by %s${RESET}\n" "$BY"
-      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     action)
       printf "${DIM}%s${RESET}  ${CLR}⚙ ACTION${RESET}    %s\n" "$TIME" "$ACTION"
       [ -n "$CMD" ] && printf "              ${DIM}\$ %s${RESET}\n" "$CMD"
-      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     don[e]|resolved)
-      printf "${DIM}%s${RESET}  ${CLR}✓ DONE${RESET}      ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      printf "${DIM}%s${RESET}  ${CLR}✓ DONE${RESET}      %s  %s\n" "$TIME" "$SHORT_LINK" "$TITLE"
       [ -n "$REASON" ] && printf "              ${DIM}↳ %s${RESET}\n" "$REASON"
-      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     wip)
-      printf "${DIM}%s${RESET}  ${CLR}🔧 WIP${RESET}      ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      printf "${DIM}%s${RESET}  ${CLR}🔧 WIP${RESET}      %s  %s\n" "$TIME" "$SHORT_LINK" "$TITLE"
       [ -n "$REASON" ] && printf "              ${DIM}↳ %s${RESET}\n" "$REASON"
-      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     human)
-      printf "${DIM}%s${RESET}  ${CLR}🙋 HUMAN${RESET}    ${BOLD}%s${RESET}${DIM}/%s${RESET}  %s\n" "$TIME" "$SHORT_REPO" "$TYPE" "$TITLE"
+      printf "${DIM}%s${RESET}  ${CLR}🙋 HUMAN${RESET}    %s  %s\n" "$TIME" "$SHORT_LINK" "$TITLE"
       [ -n "$REASON" ] && printf "              ${DIM}↳ %s${RESET}\n" "$REASON"
-      [ -n "$URL" ] && printf "              ${DIM}↳${RESET} %s\n" "$(link "$URL" "$URL")"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
     poll)
