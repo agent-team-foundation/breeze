@@ -1,44 +1,7 @@
 use std::collections::HashMap;
 
+use crate::classify::{TaskKind, classify_notification, priority_for, should_process_reason};
 use crate::util::{canonical_api_path, decode_multiline, encode_multiline, stable_file_id};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TaskKind {
-    ReviewRequest,
-    Mention,
-    Comment,
-    AssignedIssue,
-    AssignedPullRequest,
-    Discussion,
-    Other,
-}
-
-impl TaskKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TaskKind::ReviewRequest => "review_request",
-            TaskKind::Mention => "mention",
-            TaskKind::Comment => "comment",
-            TaskKind::AssignedIssue => "assigned_issue",
-            TaskKind::AssignedPullRequest => "assigned_pull_request",
-            TaskKind::Discussion => "discussion",
-            TaskKind::Other => "other",
-        }
-    }
-
-    pub fn from_str(value: &str) -> Option<Self> {
-        Some(match value {
-            "review_request" => TaskKind::ReviewRequest,
-            "mention" => TaskKind::Mention,
-            "comment" => TaskKind::Comment,
-            "assigned_issue" => TaskKind::AssignedIssue,
-            "assigned_pull_request" => TaskKind::AssignedPullRequest,
-            "discussion" => TaskKind::Discussion,
-            "other" => TaskKind::Other,
-            _ => return None,
-        })
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct TaskCandidate {
@@ -339,59 +302,6 @@ pub fn build_assigned_candidate(
         updated_at,
         priority: priority_for(&kind, "assigned"),
     }
-}
-
-pub fn should_process_reason(reason: &str) -> bool {
-    matches!(
-        reason,
-        "review_requested"
-            | "comment"
-            | "mention"
-            | "team_mention"
-            | "assign"
-            | "author"
-            | "manual"
-    )
-}
-
-pub fn priority_for(kind: &TaskKind, reason: &str) -> u8 {
-    match kind {
-        TaskKind::ReviewRequest => 100,
-        TaskKind::Mention => 95,
-        TaskKind::Discussion => 90,
-        TaskKind::Comment => 85,
-        TaskKind::AssignedPullRequest => 80,
-        TaskKind::AssignedIssue => 70,
-        TaskKind::Other => {
-            if reason == "review_requested" {
-                100
-            } else {
-                50
-            }
-        }
-    }
-}
-
-pub fn classify_notification(subject_type: &str, reason: &str) -> TaskKind {
-    if reason == "review_requested" {
-        return TaskKind::ReviewRequest;
-    }
-    if reason == "mention" || reason == "team_mention" {
-        return TaskKind::Mention;
-    }
-    if subject_type.contains("Discussion") {
-        return TaskKind::Discussion;
-    }
-    if reason == "comment" || reason == "author" || reason == "manual" {
-        return TaskKind::Comment;
-    }
-    if reason == "assign" {
-        if subject_type == "PullRequest" {
-            return TaskKind::AssignedPullRequest;
-        }
-        return TaskKind::AssignedIssue;
-    }
-    TaskKind::Other
 }
 
 fn extract_pr_number(value: &str) -> Option<u64> {

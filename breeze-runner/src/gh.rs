@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use crate::classify::TaskKind;
 use crate::config::RepoFilter;
 use crate::gh_executor::{GhBucket, GhCommandSpec, GhExecutor, is_rate_limited};
-#[cfg(test)]
-use crate::task::TaskKind;
 use crate::task::{
     TaskCandidate, build_assigned_candidate, build_notification_candidate,
     build_review_request_candidate,
@@ -705,9 +705,9 @@ mod tests {
         GhClient, SearchScope, ThreadActivity, is_rate_limit_error, pick_newer_activity,
         should_ignore_latest_self_activity, should_ignore_self_authored,
     };
+    use crate::classify::TaskKind;
     use crate::config::RepoFilter;
     use crate::gh_executor::GhExecutor;
-    use crate::task::TaskKind;
     use std::path::PathBuf;
 
     #[test]
