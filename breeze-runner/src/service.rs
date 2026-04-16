@@ -105,7 +105,7 @@ impl Service {
     pub fn doctor(&mut self) -> AppResult<()> {
         ensure_dir(&self.config.home)?;
         let lock = find_lock(&self.store.locks_dir, &self.identity, &self.config.profile)?;
-        println!("githuber doctor");
+        println!("breeze-runner doctor");
         println!("home: {}", self.config.home.display());
         println!("host: {}", self.identity.host);
         println!("login: {}", self.identity.login);
@@ -143,7 +143,7 @@ impl Service {
     pub fn status(&mut self) -> AppResult<()> {
         let lock = find_lock(&self.store.locks_dir, &self.identity, &self.config.profile)?;
         let runtime = self.store.read_runtime_status()?;
-        println!("githuber status");
+        println!("breeze-runner status");
         println!("identity: {}@{}", self.identity.login, self.identity.host);
         println!(
             "allowed repos: {}",
@@ -209,14 +209,14 @@ impl Service {
             let _ = self.stop_launchd_job();
         }
         let lock = find_lock(&self.store.locks_dir, &self.identity, &self.config.profile)?
-            .ok_or_else(|| app_error("githuber is not running for the active identity"))?;
+            .ok_or_else(|| app_error("breeze-runner is not running for the active identity"))?;
         if !lock_is_live(&lock) {
             remove_lock_dir(&self.store.locks_dir, &self.identity, &self.config.profile)?;
-            println!("removed stale githuber lock for pid {}", lock.pid);
+            println!("removed stale breeze-runner lock for pid {}", lock.pid);
             return Ok(());
         }
         stop_process(&lock)?;
-        println!("stopped githuber pid {}", lock.pid);
+        println!("stopped breeze-runner pid {}", lock.pid);
         Ok(())
     }
 
@@ -234,7 +234,7 @@ impl Service {
         let log_path = self
             .store
             .logs_dir
-            .join(format!("githuber-{}.log", current_epoch_secs()));
+            .join(format!("breeze-runner-{}.log", current_epoch_secs()));
         let executable = std::env::current_exe()?;
         let runner_value = self
             .config
@@ -307,17 +307,17 @@ impl Service {
         }
         let mut child = command
             .spawn()
-            .map_err(|error| app_error(format!("failed to spawn background githuber: {error}")))?;
+            .map_err(|error| app_error(format!("failed to spawn background breeze-runner: {error}")))?;
         thread::sleep(Duration::from_millis(750));
         if let Some(status) = child.try_wait()? {
             let log = read_text_if_exists(&log_path)?.unwrap_or_default();
             return Err(app_error(format!(
-                "background githuber exited immediately with status {:?}\nlog:\n{}",
+                "background breeze-runner exited immediately with status {:?}\nlog:\n{}",
                 status.code(),
                 log
             )));
         }
-        println!("githuber started in background");
+        println!("breeze-runner started in background");
         println!("pid: {}", child.id());
         println!("log: {}", log_path.display());
         Ok(())
@@ -440,7 +440,7 @@ impl Service {
             self.last_poll_warning.clear();
         } else {
             self.last_poll_warning = poll.warnings.join(" | ");
-            eprintln!("githuber poll warnings: {}", self.last_poll_warning);
+            eprintln!("breeze-runner poll warnings: {}", self.last_poll_warning);
         }
 
         Ok(poll.tasks)
@@ -520,7 +520,7 @@ impl Service {
             metadata.insert(
                 "summary".to_string(),
                 crate::util::encode_multiline(
-                    "githuber recovered this unfinished running task and re-queued it",
+                    "breeze-runner recovered this unfinished running task and re-queued it",
                 ),
             );
             self.store
@@ -942,7 +942,7 @@ impl Service {
         if let Some(lock) = find_lock(&self.store.locks_dir, &self.identity, &self.config.profile)?
             .filter(lock_is_live)
         {
-            println!("githuber started in background via launchd");
+            println!("breeze-runner started in background via launchd");
             println!("pid: {}", lock.pid);
             println!("log: {}", log_path.display());
             println!("plist: {}", plist_path.display());
@@ -956,7 +956,7 @@ impl Service {
         let output = run_command(&mut print)?;
         let log = read_text_if_exists(log_path)?.unwrap_or_default();
         Err(app_error(format!(
-            "launchd job did not produce a live githuber lock.\nlaunchctl:\n{}\n{}\nlog:\n{}",
+            "launchd job did not produce a live breeze-runner lock.\nlaunchctl:\n{}\n{}\nlog:\n{}",
             output.stdout, output.stderr, log
         )))
     }
@@ -977,7 +977,7 @@ impl Service {
 
     fn launchd_label(&self) -> String {
         format!(
-            "com.githuber.{}.{}",
+            "com.breeze-runner.{}.{}",
             crate::util::sanitize_filename(&self.identity.login),
             crate::util::sanitize_filename(&self.config.profile)
         )
@@ -1229,19 +1229,19 @@ fn should_route_to_operator_repo(contents: &str, login: &str) -> bool {
     ]
     .iter()
     .any(|pattern| contents.contains(pattern));
-    let mentions_githuber = contents.contains("githuber");
+    let mentions_breeze_runner = contents.contains("breeze-runner");
     let directs_to_operator = [
         format!("@{login}"),
         format!("{login}'s agent"),
         format!("{login}/{login}"),
         "your agent".to_string(),
-        "scripts/githuber".to_string(),
-        "githuber service".to_string(),
+        "scripts/breeze-runner".to_string(),
+        "breeze-runner service".to_string(),
     ]
     .iter()
     .any(|pattern| contents.contains(pattern));
 
-    mentions_githuber && asks_for_change && directs_to_operator
+    mentions_breeze_runner && asks_for_change && directs_to_operator
 }
 
 fn lock_status(lock: Option<&LockInfo>) -> &'static str {
@@ -1292,10 +1292,10 @@ mod tests {
     }
 
     #[test]
-    fn routes_operator_requests_to_home_repo_when_githuber_is_target() {
+    fn routes_operator_requests_to_home_repo_when_breeze_runner_is_target() {
         let text = r#"
-        @bingran-you could you configure the githuber agent to merge after approving first-tree:sync PRs?
-        This is a request to update githuber logic.
+        @bingran-you could you configure the breeze-runner agent to merge after approving first-tree:sync PRs?
+        This is a request to update breeze-runner logic.
         "#;
 
         assert!(should_route_to_operator_repo(text, "bingran-you"));
@@ -1305,7 +1305,7 @@ mod tests {
     fn does_not_route_normal_mentions_without_self_maintenance_request() {
         let text = r#"
         @bingran-you please review this pull request.
-        The runtime looks fine and githuber already commented.
+        The runtime looks fine and breeze-runner already commented.
         "#;
 
         assert!(!should_route_to_operator_repo(text, "bingran-you"));

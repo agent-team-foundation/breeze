@@ -675,7 +675,7 @@ fn canonical_api_path(url: &str) -> String {
 
 fn snapshot_readme(task: &TaskCandidate, snapshot_dir: &Path) -> String {
     format!(
-        "githuber prepared this local snapshot before the agent started.\n\
+        "breeze-runner prepared this local snapshot before the agent started.\n\
 \n\
 Use these files first to avoid redundant GitHub API calls.\n\
 \n\
@@ -684,7 +684,7 @@ Use these files first to avoid redundant GitHub API calls.\n\
 - Latest comment payload: {latest_comment}\n\
 - PR or issue material is stored next to those files when available.\n\
 \n\
-If you still need `gh`, githuber will broker and pace the command automatically.\n\
+If you still need `gh`, breeze-runner will broker and pace the command automatically.\n\
 \n\
 Task: {kind} in {repo}\n\
 Title: {title}\n\

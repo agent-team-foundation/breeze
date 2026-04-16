@@ -154,12 +154,12 @@ impl Config {
                 all.extend(iter);
                 (CommandKind::Run, all)
             }
-            Some(other) => return Err(app_error(format!("unknown githuber command `{other}`"))),
+            Some(other) => return Err(app_error(format!("unknown breeze-runner command `{other}`"))),
         };
 
         let mut home = env::var_os("GITHUBER_HOME")
             .map(PathBuf::from)
-            .unwrap_or(home_dir()?.join(".githuber"));
+            .unwrap_or(home_dir()?.join(".breeze-runner"));
         let mut host = env::var("GITHUBER_HOST").unwrap_or_else(|_| "github.com".to_string());
         let mut profile = env::var("GITHUBER_PROFILE").unwrap_or_else(|_| "default".to_string());
         let mut repo_filter = RepoFilter::parse_csv(
@@ -186,7 +186,7 @@ impl Config {
         let mut codex_model = env::var("GITHUBER_CODEX_MODEL").ok();
         let mut claude_model = env::var("GITHUBER_CLAUDE_MODEL").ok();
         let mut disclosure_text = env::var("GITHUBER_DISCLOSURE").unwrap_or_else(|_| {
-            "Agent note: this reply was prepared and posted by githuber running locally for the active account."
+            "Agent note: this reply was prepared and posted by breeze-runner running locally for the active account."
                 .to_string()
         });
         let mut dry_run = parse_bool_env("GITHUBER_DRY_RUN").unwrap_or(false);
@@ -231,7 +231,7 @@ impl Config {
                 "--dry-run" => dry_run = true,
                 "--no-dry-run" => dry_run = false,
                 "--help" | "-h" => return Ok(Self::help()),
-                unknown => return Err(app_error(format!("unknown githuber flag `{unknown}`"))),
+                unknown => return Err(app_error(format!("unknown breeze-runner flag `{unknown}`"))),
             }
             index += 1;
         }
@@ -306,17 +306,17 @@ impl Config {
             codex_model: None,
             claude_model: None,
             disclosure_text:
-                "Agent note: this reply was prepared and posted by githuber running locally for the active account."
+                "Agent note: this reply was prepared and posted by breeze-runner running locally for the active account."
                     .to_string(),
             dry_run: false,
         }
     }
 
     pub fn usage() -> &'static str {
-        "githuber - local GitHub inbox automation service
+        "breeze-runner - local GitHub inbox automation service
 
 USAGE
-  githuber <command> [flags]
+  breeze-runner <command> [flags]
 
 COMMANDS
   doctor     Validate local tools, gh auth, and state directories
@@ -329,7 +329,7 @@ COMMANDS
   help       Show this help
 
 FLAGS
-  --home <path>                  Override state directory (default: ~/.githuber)
+  --home <path>                  Override state directory (default: ~/.breeze-runner)
   --host <host>                  GitHub host to use (default: github.com)
   --profile <name>               Lock partition for this automation profile
   --allow-repo <patterns>        Restrict processing to owner/repo or owner/* patterns
@@ -432,7 +432,7 @@ mod tests {
     #[test]
     fn parses_custom_runner_flags() {
         let config = Config::parse(vec![
-            "githuber".to_string(),
+            "breeze-runner".to_string(),
             "run-once".to_string(),
             "--runner".to_string(),
             "claude,codex".to_string(),
@@ -460,7 +460,7 @@ mod tests {
     #[test]
     fn parses_repo_allowlist_patterns() {
         let config = Config::parse(vec![
-            "githuber".to_string(),
+            "breeze-runner".to_string(),
             "run-once".to_string(),
             "--allow-repo".to_string(),
             "KnoWhiz/DoWhiz,agent-team-foundation/*,bingran-you/*".to_string(),

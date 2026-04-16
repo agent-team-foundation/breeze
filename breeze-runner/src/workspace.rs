@@ -106,7 +106,7 @@ impl WorkspaceManager {
 
     fn prepare_ref(&self, mirror_dir: &Path, task: &TaskCandidate) -> AppResult<String> {
         if let Some(number) = task.pr_number() {
-            let ref_name = format!("refs/remotes/origin/githuber-pr-{number}");
+            let ref_name = format!("refs/remotes/origin/breeze-runner-pr-{number}");
             let mut fetch = self.authenticated_git_command();
             fetch
                 .arg("--git-dir")
@@ -137,7 +137,7 @@ impl WorkspaceManager {
             .arg(workspace_dir)
             .arg("config")
             .arg("user.name")
-            .arg(format!("{} via githuber", self.login));
+            .arg(format!("{} via breeze-runner", self.login));
         let _ = crate::util::run_command(&mut name);
 
         let mut email = Command::new("git");

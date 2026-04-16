@@ -103,7 +103,7 @@ fn serve_loop(
         let pending = match list_pending_requests(&requests_dir) {
             Ok(pending) => pending,
             Err(error) => {
-                eprintln!("githuber broker: failed to scan request queue: {error}");
+                eprintln!("breeze-runner broker: failed to scan request queue: {error}");
                 thread::sleep(Duration::from_millis(250));
                 continue;
             }
@@ -404,7 +404,7 @@ for arg in "$@"; do
   case "$arg" in
     *'
 '*)
-      echo "githuber gh shim does not support newline arguments" >&2
+      echo "breeze-runner gh shim does not support newline arguments" >&2
       exit 2
       ;;
   esac
@@ -423,7 +423,7 @@ timeout_secs="${GITHUBER_BROKER_TIMEOUT_SECS:-1800}"
 deadline=$(( $(date +%s) + timeout_secs ))
 while [ ! -f "$request_dir/response.env" ]; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "githuber gh shim timed out waiting for broker" >&2
+    echo "breeze-runner gh shim timed out waiting for broker" >&2
     exit 124
   fi
   sleep 0.1
@@ -534,6 +534,6 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        env::temp_dir().join(format!("githuber-broker-{name}-{suffix}"))
+        env::temp_dir().join(format!("breeze-runner-broker-{name}-{suffix}"))
     }
 }

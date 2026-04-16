@@ -180,7 +180,7 @@ fn build_prompt(request: &RunnerRequest) -> String {
         "This is GitHuber service and you are a team of agents representing {git_id}.
 
 This is GitHuber service code repo:
-https://github.com/bingran-you/bingran-you/tree/main/scripts/githuber
+https://github.com/bingran-you/bingran-you/tree/main/scripts/breeze-runner
 
 Your job is addressing any comments / discussions / review request / task request / pull request etc. (basically any GitHub notifications) related to GitHub id: {git_id}. When reviewing pull requests, follow the principle here: https://google.github.io/eng-practices/review/
 
