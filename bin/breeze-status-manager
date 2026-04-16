@@ -148,12 +148,14 @@ case "$CMD" in
       ' "$INBOX" > "$BREEZE_DIR/inbox.json.tmp" && mv "$BREEZE_DIR/inbox.json.tmp" "$INBOX"
     fi
 
-    # Log the status change
+    # Log the status change as a transition
     NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL _ <<< "$(notif_meta "$NOTIF_ID")"
+    # Get old status from inbox
+    OLD_STATUS=$(jq -r --arg id "$NOTIF_ID" '.notifications[] | select(.id == $id) | .breeze_status // "new"' "$INBOX" 2>/dev/null || echo "new")
     log_event "$(jq -nc \
       --arg ts "$NOW" \
-      --arg event "$NEW_STATUS" \
+      --arg event "transition" \
       --arg id "$NOTIF_ID" \
       --arg type "$N_TYPE" \
       --arg repo "$N_REPO" \
@@ -161,7 +163,9 @@ case "$CMD" in
       --arg url "$N_URL" \
       --arg by "$SESSION_ID" \
       --arg reason "$REASON" \
-      '{ts:$ts,event:$event,id:$id,type:$type,repo:$repo,title:$title,url:$url,by:$by,reason:$reason}')"
+      --arg from "$OLD_STATUS" \
+      --arg to "$NEW_STATUS" \
+      '{ts:$ts,event:$event,id:$id,type:$type,repo:$repo,title:$title,url:$url,by:$by,reason:$reason,from:$from,to:$to}')"
     echo "$NEW_STATUS"
     ;;
 

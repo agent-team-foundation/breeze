@@ -137,8 +137,12 @@ format_line() {
       [ -n "$REASON" ] && printf "              ${DIM}↳ %s${RESET}\n" "$REASON"
       LINE_COUNT=$((LINE_COUNT + 1))
       ;;
+    transition)
+      local TO=$(echo "$LINE" | jq -r '.to // ""' 2>/dev/null)
+      printf "${DIM}%s${RESET}  ${CLR}↻${RESET} %s → %s  %s  %s\n" "$TIME" "$FROM" "$TO" "$SHORT_LINK" "$TITLE"
+      LINE_COUNT=$((LINE_COUNT + 1))
+      ;;
     poll)
-      # Only show poll if it has new notifications (quiet otherwise)
       printf "${DIM}%s  ↻ %s notifications${RESET}\n" "$TIME" "$COUNT"
       ;;
     *)
@@ -175,9 +179,20 @@ print_header() {
 # Main
 print_header
 
-# Show last 30 lines of history (reduced from 50 for cleaner start)
+# Show recent history — deduplicate by issue/PR, show only latest event per item
 if [ -s "$LOG_FILE" ]; then
-  grep -E '^\{.*\}$' "$LOG_FILE" | tail -30 | while IFS= read -r line; do
+  # For history: keep only the latest event per URL, sorted by time
+  grep -E '^\{.*\}$' "$LOG_FILE" | tail -100 | jq -sc '
+    # Group by URL (or use ts for non-item events like poll)
+    group_by(.url // .ts) |
+    # Keep only the last (most recent) event per group
+    map(sort_by(.ts) | last) |
+    # Sort all by timestamp
+    sort_by(.ts) |
+    # Show last 20
+    .[-20:] |
+    .[]
+  ' 2>/dev/null | while IFS= read -r line; do
     format_line "$line"
   done
   echo ""

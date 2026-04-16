@@ -221,16 +221,18 @@ if [ -f "$INBOX" ]; then
   OLD_STATUSES=$(jq -r '.notifications[] | "\(.id)\t\(.breeze_status // "new")"' "$INBOX" 2>/dev/null || true)
   NEW_STATUSES=$(jq -r '.[] | "\(.id)\t\(.breeze_status // "new")"' "$BREEZE_DIR/.enriched.json" 2>/dev/null || true)
 
-  # Find changed statuses
+  # Find changed statuses — only log label-driven transitions, not bulk new→done from merged/closed
   while IFS=$'\t' read -r NID NEW_ST; do
     [ -z "$NID" ] && continue
     OLD_ST=$(echo "$OLD_STATUSES" | awk -F'\t' -v id="$NID" '$1 == id {print $2; exit}')
     if [ -n "$OLD_ST" ] && [ "$OLD_ST" != "$NEW_ST" ]; then
-      # Log the status change
+      # Skip new→done transitions (these are just GitHub state, not label changes)
+      [ "$OLD_ST" = "new" ] && [ "$NEW_ST" = "done" ] && continue
+      # Log the status change as a transition event
       META=$(jq -c --arg id "$NID" '.[] | select(.id == $id) | {type: .type, repo: .repo, title: .title, url: .html_url}' "$BREEZE_DIR/.enriched.json" 2>/dev/null || echo '{}')
       NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-      echo "$META" | jq -c --arg ts "$NOW_TS" --arg event "$NEW_ST" --arg from "$OLD_ST" \
-        '. + {ts: $ts, event: $event, from: $from}' >> "$LOG_FILE" 2>/dev/null || true
+      echo "$META" | jq -c --arg ts "$NOW_TS" --arg event "transition" --arg from "$OLD_ST" --arg to "$NEW_ST" \
+        '. + {ts: $ts, event: $event, from: $from, to: $to}' >> "$LOG_FILE" 2>/dev/null || true
     fi
   done <<< "$NEW_STATUSES"
 fi
