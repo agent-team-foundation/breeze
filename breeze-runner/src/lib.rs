@@ -1,9 +1,11 @@
 mod broker;
+mod bus;
 mod classify;
 mod config;
 mod fetcher;
 mod gh;
 mod gh_executor;
+mod http;
 mod identity;
 mod json;
 mod lock;

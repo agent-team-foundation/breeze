@@ -354,7 +354,12 @@ impl Service {
 
     pub fn run_forever(&mut self) -> AppResult<()> {
         self.acquire_lock()?;
-        let stop = self.spawn_inbox_poll_loop()?;
+        let bus = crate::bus::Bus::new();
+        let stop = Arc::new(AtomicBool::new(false));
+        self.spawn_inbox_poll_loop(bus.clone(), stop.clone())?;
+        if !self.config.http_disabled {
+            self.spawn_http_server(bus.clone(), stop.clone())?;
+        }
         let result = self.run_loop(false);
         stop.store(true, Ordering::Relaxed);
         result
@@ -362,22 +367,25 @@ impl Service {
 
     /// Spawn a background thread that refreshes `~/.breeze/inbox.json` on a
     /// fixed cadence so TUI consumers (statusline, skill) always see fresh
-    /// data without an external launchd job. Returns a flag the caller flips
-    /// to request graceful shutdown.
-    fn spawn_inbox_poll_loop(&self) -> AppResult<Arc<AtomicBool>> {
+    /// data without an external launchd job. Events are also published to the
+    /// in-process bus so the HTTP/SSE server can push them to a dashboard.
+    fn spawn_inbox_poll_loop(
+        &self,
+        bus: crate::bus::Bus,
+        stop: Arc<AtomicBool>,
+    ) -> AppResult<()> {
         let inbox_dir = crate::fetcher::resolve_inbox_dir()?;
         let fetcher = crate::fetcher::Fetcher::new(
             self.gh.executor().clone(),
             self.identity.host.clone(),
             inbox_dir.clone(),
             self.config.repo_filter.clone(),
-        );
+        )
+        .with_bus(bus);
         let interval = Duration::from_secs(self.config.inbox_poll_interval_secs.max(1));
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_for_thread = stop.clone();
         let claims_dir = inbox_dir.join("claims");
         thread::spawn(move || {
-            while !stop_for_thread.load(Ordering::Relaxed) {
+            while !stop.load(Ordering::Relaxed) {
                 match fetcher.poll_once() {
                     Ok(outcome) => {
                         for warning in &outcome.warnings {
@@ -391,7 +399,7 @@ impl Service {
                 let _ = crate::fetcher::cleanup_expired_claims(&claims_dir, 300);
                 let mut waited = Duration::from_secs(0);
                 while waited < interval {
-                    if stop_for_thread.load(Ordering::Relaxed) {
+                    if stop.load(Ordering::Relaxed) {
                         break;
                     }
                     thread::sleep(Duration::from_secs(1));
@@ -399,7 +407,25 @@ impl Service {
                 }
             }
         });
-        Ok(stop)
+        Ok(())
+    }
+
+    fn spawn_http_server(
+        &self,
+        bus: crate::bus::Bus,
+        stop: Arc<AtomicBool>,
+    ) -> AppResult<()> {
+        let inbox_dir = crate::fetcher::resolve_inbox_dir()?;
+        let address = std::net::SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            self.config.http_port,
+        );
+        thread::spawn(move || {
+            if let Err(error) = crate::http::serve(address, inbox_dir, bus, stop) {
+                eprintln!("breeze: http server exited with error: {error}");
+            }
+        });
+        Ok(())
     }
 
     fn acquire_lock(&mut self) -> AppResult<()> {
