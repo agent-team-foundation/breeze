@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "githuber"
+name = "breeze-runner"
 version = "0.1.0"

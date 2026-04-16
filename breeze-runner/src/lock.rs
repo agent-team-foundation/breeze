@@ -84,7 +84,7 @@ impl ServiceLock {
                             }
                         }
                         return Err(app_error(format!(
-                            "githuber is already running for {} on {} (pid {}, profile `{}`)",
+                            "breeze-runner is already running for {} on {} (pid {}, profile `{}`)",
                             existing.login, existing.host, existing.pid, existing.profile
                         )));
                     }
@@ -167,7 +167,7 @@ pub fn remove_lock_dir(base_dir: &Path, identity: &Identity, profile: &str) -> A
 pub fn stop_process(lock: &LockInfo) -> AppResult<()> {
     let mut command = Command::new("kill");
     command.arg(lock.pid.to_string());
-    crate::util::run_command_checked(&mut command, "stop githuber process")?;
+    crate::util::run_command_checked(&mut command, "stop breeze-runner process")?;
     Ok(())
 }
 

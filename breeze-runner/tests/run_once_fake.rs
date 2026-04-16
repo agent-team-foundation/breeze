@@ -10,7 +10,7 @@ fn unique_dir(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    env::temp_dir().join(format!("githuber-{name}-{suffix}"))
+    env::temp_dir().join(format!("breeze-runner-{name}-{suffix}"))
 }
 
 fn write_script(path: &Path, body: &str) {
@@ -122,7 +122,7 @@ for arg in "$@"; do
   fi
   prev="$arg"
 done
-gh issue comment owner/repo#1 --body "Agent note: this reply was prepared and posted by githuber running locally for the active account."
+gh issue comment owner/repo#1 --body "Agent note: this reply was prepared and posted by breeze-runner running locally for the active account."
 printf 'GITHUBER_RESULT: status=handled summary=fake codex handled thread\n' > "$out"
 "#,
     );
@@ -132,14 +132,14 @@ printf 'GITHUBER_RESULT: status=handled summary=fake codex handled thread\n' > "
         bin_dir.display(),
         env::var("PATH").unwrap_or_default()
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_githuber"))
+    let output = Command::new(env!("CARGO_BIN_EXE_breeze-runner"))
         .env("PATH", path)
         .env("GITHUBER_HOME", &home_dir)
         .env("GITHUBER_CALLS", &calls_path)
         .env("GITHUBER_ACTIONS", &actions_path)
         .args(["run-once", "--runner", "codex", "--host", "github.com"])
         .output()
-        .expect("githuber should run");
+        .expect("breeze-runner should run");
 
     assert!(
         output.status.success(),
@@ -276,7 +276,7 @@ for arg in "$@"; do
   fi
   prev="$arg"
 done
-gh issue comment owner/repo#1 --body "Agent note: this reply was prepared and posted by githuber running locally for the active account."
+gh issue comment owner/repo#1 --body "Agent note: this reply was prepared and posted by breeze-runner running locally for the active account."
 printf 'GITHUBER_RESULT: status=handled summary=fake codex handled thread\n' > "$out"
 "#,
     );
@@ -288,14 +288,14 @@ printf 'GITHUBER_RESULT: status=handled summary=fake codex handled thread\n' > "
     );
 
     let run = || {
-        Command::new(env!("CARGO_BIN_EXE_githuber"))
+        Command::new(env!("CARGO_BIN_EXE_breeze-runner"))
             .env("PATH", &path)
             .env("GITHUBER_HOME", &home_dir)
             .env("GITHUBER_CALLS", &calls_path)
             .env("GITHUBER_ACTIONS", &actions_path)
             .args(["run-once", "--runner", "codex", "--host", "github.com"])
             .output()
-            .expect("githuber should run")
+            .expect("breeze-runner should run")
     };
 
     let first = run();
@@ -463,14 +463,14 @@ printf 'GITHUBER_RESULT: status=handled summary=recovered stale task\n' > "$out"
         bin_dir.display(),
         env::var("PATH").unwrap_or_default()
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_githuber"))
+    let output = Command::new(env!("CARGO_BIN_EXE_breeze-runner"))
         .env("PATH", path)
         .env("GITHUBER_HOME", &home_dir)
         .env("GITHUBER_CALLS", &calls_path)
         .env("GITHUBER_ACTIONS", &actions_path)
         .args(["run-once", "--runner", "codex", "--host", "github.com"])
         .output()
-        .expect("githuber should run");
+        .expect("breeze-runner should run");
 
     assert!(
         output.status.success(),
@@ -556,14 +556,14 @@ exit 1
         bin_dir.display(),
         env::var("PATH").unwrap_or_default()
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_githuber"))
+    let output = Command::new(env!("CARGO_BIN_EXE_breeze-runner"))
         .env("PATH", path)
         .env("GITHUBER_HOME", &home_dir)
         .env("GITHUBER_CALLS", &calls_path)
         .env("GITHUBER_ACTIONS", &actions_path)
         .args(["run-once", "--runner", "codex", "--host", "github.com"])
         .output()
-        .expect("githuber should run");
+        .expect("breeze-runner should run");
 
     assert!(
         output.status.success(),
