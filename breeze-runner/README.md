@@ -5,11 +5,11 @@
 ## Commands
 
 ```bash
-cargo run --manifest-path scripts/breeze-runner/Cargo.toml -- doctor
-cargo run --manifest-path scripts/breeze-runner/Cargo.toml -- run-once
-cargo run --manifest-path scripts/breeze-runner/Cargo.toml -- start
-cargo run --manifest-path scripts/breeze-runner/Cargo.toml -- status
-cargo run --manifest-path scripts/breeze-runner/Cargo.toml -- stop
+cargo run --manifest-path breeze-runner/Cargo.toml -- doctor
+cargo run --manifest-path breeze-runner/Cargo.toml -- run-once
+cargo run --manifest-path breeze-runner/Cargo.toml -- start
+cargo run --manifest-path breeze-runner/Cargo.toml -- status
+cargo run --manifest-path breeze-runner/Cargo.toml -- stop
 ```
 
 ## Behavior
@@ -21,7 +21,7 @@ cargo run --manifest-path scripts/breeze-runner/Cargo.toml -- stop
 - Prepares a local snapshot for each task before the agent starts so the agent can inspect GitHub context without re-fetching it.
 - Launches `codex` and/or `claude` in round-robin order with dangerous local permissions.
 - Keeps local agent/worktree fan-out high while brokering all in-task `gh` commands through a single paced queue.
-- Persists task state, lock state, logs, and workspaces under `~/.breeze-runner` by default.
+- Persists task state, lock state, logs, and workspaces under `~/.breeze/runner` by default.
 
 ## Notes
 

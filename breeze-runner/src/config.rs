@@ -157,39 +157,39 @@ impl Config {
             Some(other) => return Err(app_error(format!("unknown breeze-runner command `{other}`"))),
         };
 
-        let mut home = env::var_os("GITHUBER_HOME")
+        let mut home = env::var_os("BREEZE_HOME")
             .map(PathBuf::from)
-            .unwrap_or(home_dir()?.join(".breeze-runner"));
-        let mut host = env::var("GITHUBER_HOST").unwrap_or_else(|_| "github.com".to_string());
-        let mut profile = env::var("GITHUBER_PROFILE").unwrap_or_else(|_| "default".to_string());
+            .unwrap_or(home_dir()?.join(".breeze").join("runner"));
+        let mut host = env::var("BREEZE_HOST").unwrap_or_else(|_| "github.com".to_string());
+        let mut profile = env::var("BREEZE_PROFILE").unwrap_or_else(|_| "default".to_string());
         let mut repo_filter = RepoFilter::parse_csv(
-            env::var("GITHUBER_ALLOWED_REPOS")
+            env::var("BREEZE_ALLOWED_REPOS")
                 .unwrap_or_default()
                 .as_str(),
         )?;
         let mut runners = parse_runners(
-            env::var("GITHUBER_RUNNERS")
+            env::var("BREEZE_RUNNERS")
                 .unwrap_or_else(|_| "codex,claude".to_string())
                 .as_str(),
         )?;
-        let mut max_parallel = parse_usize_env("GITHUBER_MAX_PARALLEL").unwrap_or(20);
-        let mut poll_interval_secs = parse_u64_env("GITHUBER_POLL_INTERVAL_SECS").unwrap_or(600);
-        let mut task_limit = parse_usize_env("GITHUBER_TASK_LIMIT").unwrap_or(100);
+        let mut max_parallel = parse_usize_env("BREEZE_MAX_PARALLEL").unwrap_or(20);
+        let mut poll_interval_secs = parse_u64_env("BREEZE_POLL_INTERVAL_SECS").unwrap_or(600);
+        let mut task_limit = parse_usize_env("BREEZE_TASK_LIMIT").unwrap_or(100);
         let mut notification_lookback_secs =
-            parse_u64_env("GITHUBER_NOTIFICATION_LOOKBACK_SECS").unwrap_or(60 * 60 * 24);
+            parse_u64_env("BREEZE_NOTIFICATION_LOOKBACK_SECS").unwrap_or(60 * 60 * 24);
         let mut search_reconcile_interval_secs =
-            parse_u64_env("GITHUBER_SEARCH_RECONCILE_INTERVAL_SECS").unwrap_or(60 * 60 * 6);
+            parse_u64_env("BREEZE_SEARCH_RECONCILE_INTERVAL_SECS").unwrap_or(60 * 60 * 6);
         let mut gh_write_cooldown_ms =
-            parse_u64_env("GITHUBER_GH_WRITE_COOLDOWN_MS").unwrap_or(1_250);
+            parse_u64_env("BREEZE_GH_WRITE_COOLDOWN_MS").unwrap_or(1_250);
         let mut workspace_ttl_secs =
-            parse_u64_env("GITHUBER_WORKSPACE_TTL_SECS").unwrap_or(60 * 60 * 24 * 3);
-        let mut codex_model = env::var("GITHUBER_CODEX_MODEL").ok();
-        let mut claude_model = env::var("GITHUBER_CLAUDE_MODEL").ok();
-        let mut disclosure_text = env::var("GITHUBER_DISCLOSURE").unwrap_or_else(|_| {
-            "Agent note: this reply was prepared and posted by breeze-runner running locally for the active account."
+            parse_u64_env("BREEZE_WORKSPACE_TTL_SECS").unwrap_or(60 * 60 * 24 * 3);
+        let mut codex_model = env::var("BREEZE_CODEX_MODEL").ok();
+        let mut claude_model = env::var("BREEZE_CLAUDE_MODEL").ok();
+        let mut disclosure_text = env::var("BREEZE_DISCLOSURE").unwrap_or_else(|_| {
+            "Agent note: this reply was prepared and posted by breeze running locally for the active account."
                 .to_string()
         });
-        let mut dry_run = parse_bool_env("GITHUBER_DRY_RUN").unwrap_or(false);
+        let mut dry_run = parse_bool_env("BREEZE_DRY_RUN").unwrap_or(false);
 
         let mut index = 0usize;
         while index < remainder.len() {
@@ -306,7 +306,7 @@ impl Config {
             codex_model: None,
             claude_model: None,
             disclosure_text:
-                "Agent note: this reply was prepared and posted by breeze-runner running locally for the active account."
+                "Agent note: this reply was prepared and posted by breeze running locally for the active account."
                     .to_string(),
             dry_run: false,
         }
@@ -329,7 +329,7 @@ COMMANDS
   help       Show this help
 
 FLAGS
-  --home <path>                  Override state directory (default: ~/.breeze-runner)
+  --home <path>                  Override state directory (default: ~/.breeze/runner)
   --host <host>                  GitHub host to use (default: github.com)
   --profile <name>               Lock partition for this automation profile
   --allow-repo <patterns>        Restrict processing to owner/repo or owner/* patterns
@@ -349,22 +349,22 @@ FLAGS
   --dry-run                      Poll and schedule tasks without launching agents
 
 ENV
-  GITHUBER_HOME
-  GITHUBER_HOST
-  GITHUBER_PROFILE
-  GITHUBER_ALLOWED_REPOS
-  GITHUBER_RUNNERS
-  GITHUBER_MAX_PARALLEL
-  GITHUBER_POLL_INTERVAL_SECS
-  GITHUBER_TASK_LIMIT
-  GITHUBER_NOTIFICATION_LOOKBACK_SECS
-  GITHUBER_SEARCH_RECONCILE_INTERVAL_SECS
-  GITHUBER_GH_WRITE_COOLDOWN_MS
-  GITHUBER_WORKSPACE_TTL_SECS
-  GITHUBER_CODEX_MODEL
-  GITHUBER_CLAUDE_MODEL
-  GITHUBER_DISCLOSURE
-  GITHUBER_DRY_RUN"
+  BREEZE_HOME
+  BREEZE_HOST
+  BREEZE_PROFILE
+  BREEZE_ALLOWED_REPOS
+  BREEZE_RUNNERS
+  BREEZE_MAX_PARALLEL
+  BREEZE_POLL_INTERVAL_SECS
+  BREEZE_TASK_LIMIT
+  BREEZE_NOTIFICATION_LOOKBACK_SECS
+  BREEZE_SEARCH_RECONCILE_INTERVAL_SECS
+  BREEZE_GH_WRITE_COOLDOWN_MS
+  BREEZE_WORKSPACE_TTL_SECS
+  BREEZE_CODEX_MODEL
+  BREEZE_CLAUDE_MODEL
+  BREEZE_DISCLOSURE
+  BREEZE_DRY_RUN"
     }
 }
 

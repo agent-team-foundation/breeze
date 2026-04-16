@@ -977,7 +977,7 @@ impl Service {
 
     fn launchd_label(&self) -> String {
         format!(
-            "com.breeze-runner.{}.{}",
+            "com.breeze.runner.{}.{}",
             crate::util::sanitize_filename(&self.identity.login),
             crate::util::sanitize_filename(&self.config.profile)
         )
@@ -1235,7 +1235,7 @@ fn should_route_to_operator_repo(contents: &str, login: &str) -> bool {
         format!("{login}'s agent"),
         format!("{login}/{login}"),
         "your agent".to_string(),
-        "scripts/breeze-runner".to_string(),
+        "agent-team-foundation/breeze".to_string(),
         "breeze-runner service".to_string(),
     ]
     .iter()
