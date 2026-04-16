@@ -12,9 +12,9 @@ GitHub notifications inside Claude Code. See what needs your attention in the st
 2. **Shows a summary** in your Claude Code statusline with a terminal bell on new items
 3. **Type `/breeze`** to see your inbox grouped by project with clickable GitHub links
 4. **Pick a notification** and the agent summarizes the context, suggests an action with a confidence level
-5. **Act on it** in natural language ("approve this PR", "snooze for 3 days", "close as duplicate of #42")
+5. **Act on it** in natural language ("approve this PR", "mark for human review", "this is handled")
 
-breeze manages its own 5-state status system — the statusline count only changes when you or your agent act, not when GitHub marks something as read.
+breeze uses **GitHub labels** to track notification status. The source of truth lives on GitHub, not your laptop. This means the state is visible to your team, visible on github.com, and survives if you reinstall breeze.
 
 ## Install
 
@@ -25,66 +25,69 @@ cd breeze-demo
 ```
 
 The setup script:
-- Creates `~/.breeze/` with a default config
+- Creates `~/.breeze/` for local cache (inbox.json, activity log, claim locks)
 - Installs a launchd plist (macOS) or crontab entry (Linux) to poll every 60 seconds
-- Symlinks the `/breeze` skill into `~/.claude/skills/`
+- Symlinks the `/breeze`, `/breeze-watch`, `/breeze-upgrade` skills into `~/.claude/skills/`
 - Chains breeze into your existing Claude Code statusline (doesn't replace it)
 - Runs an initial poll
 
 ### Prerequisites
 
-- [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated
+- [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated with `repo` scope
 - [jq](https://jqlang.github.io/jq/) installed
 - Claude Code
 
+## Commands
+
+- **`/breeze`** — open the inbox dashboard, pick a notification, act on it
+- **`/breeze-watch`** — live activity log with clickable GitHub links, in a new terminal window
+- **`/breeze-upgrade`** — pull the latest code (no restart needed)
+
 ## Usage
 
-In Claude Code, type `/breeze` to open your inbox.
+In Claude Code, type `/breeze` to open your inbox grouped by project.
 
 ```
-/breeze inbox — 15 open · 3 claimed · 5 pending · 1 snoozed
+/breeze inbox — 15 new · 3 wip · 5 human · 50 done
 
-## serenakeyitan/paperclip-tree (10)
+### paperclip (10)
   1. [PR] feat: add OAuth support (review_requested)
-     https://github.com/serenakeyitan/paperclip-tree/pull/305
-  2. [PR] fix: remove hardcoded JWT (author)
-     https://github.com/serenakeyitan/paperclip-tree/pull/227
+     https://github.com/paperclipai/paperclip/pull/305
+  2. [Issue] bug: broken login on mobile (mention)
+     https://github.com/paperclipai/paperclip/issues/3700
 
-## agent-team-foundation/first-tree (3)
-  1. [Issue] bug: extractOwnersFromCodeowners (mention)
-     https://github.com/agent-team-foundation/first-tree/issues/90
-
-## paperclipai/paperclip (2)
-  1. [Discussion] PR review agent for paperclip-tree (participating)
-     https://github.com/serenakeyitan/paperclip-tree/discussions/287
+### paperclip-tree (3)
+  1. [PR] sync: add MCP server (author)
+     https://github.com/serenakeyitan/paperclip-tree/pull/266
 ```
 
 Pick a number. The agent loads the full context (PR diff, comment thread, issue body), summarizes it, and suggests an action. Tell it what to do in plain English.
 
 ## Notification Status
 
-breeze tracks its own status per notification, independent of GitHub's read/unread:
+breeze tracks status using **GitHub labels** on the PR/issue/discussion:
 
-| Status | Meaning |
-|--------|---------|
-| **open** | Needs action, no one's on it (shows in statusline) |
-| **claimed** | Agent or human is actively working on it (locked) |
-| **pending** | Acted on, waiting for someone else to respond |
-| **snoozed** | Deferred — comes back after timer or new activity |
-| **resolved** | Done, no more action needed |
+| Label | Status | Meaning | Shows in statusline? |
+|-------|--------|---------|---------------------|
+| *(none)* | **new** | Needs action, no one's on it | Yes |
+| `breeze:wip` | **wip** | Agent or human is actively working | No |
+| `breeze:human` | **human** | Escalated to human judgment | No |
+| `breeze:done` | **done** | Handled, no more action needed | No |
 
-The statusline only counts **open** notifications. This means the number is stable across all your terminals — it only changes when you or your agent take action, not when GitHub randomly marks something as read.
+Additionally, PRs that are **merged** or **closed** on GitHub are treated as `done` automatically (no label needed).
+
+The statusline only counts **new** notifications. The number is stable across terminals because state lives on GitHub — same labels, same count, every machine.
 
 ### Status commands
 
-- `"resolve #3"` — mark as done
-- `"snooze #5 for 3 days"` — hide until then (or until new activity)
-- `"show pending"` — see what's waiting on others
-- `"show resolved"` — see what was handled recently
+- `"resolve #3"` or `"mark #3 done"` — applies `breeze:done` label
+- `"I'll handle this"` or `"escalate to human"` — applies `breeze:human` label
+- `"working on it"` — applies `breeze:wip` label (agent lock)
+- `"show wip"` or `"show done"` — filter by status
 
 ### Agent claim locks
 
-When an agent starts working on a notification, it claims it with an atomic filesystem lock. Other agents see the claim and skip it. Claims auto-expire after 5 minutes if the agent crashes.
+When an agent starts working on a notification, it claims it with an atomic filesystem lock at `~/.breeze/claims/<id>/`. Other agents see the claim and skip it. Claims auto-expire after 5 minutes if the agent crashes.
 
 ## Config
 
@@ -95,31 +98,29 @@ repos:
   - all                    # or list specific repos: owner/repo1, owner/repo2
 poll_interval: 60          # seconds between polls
 footer: true               # append "sent via breeze" to comments
-auto_mark_read: false      # mark notifications as read after polling
 ```
 
 ## How it works
 
 ```
-Poller (launchd/cron)  →  inbox.json  ←→  status.json
-         ↑                    ↓                ↑
-     gh api              Statusline        /breeze skill
-   /notifications       (open count)     (dashboard + actions)
-                                               ↓
-                                        gh pr review
-                                        gh issue comment
-                                        gh pr merge
-                                               ↓
-                                    claims/<id>/  (agent locks)
+GitHub API  →  Poller (launchd)  →  ~/.breeze/inbox.json  →  Statusline
+     ↑                                     ↓
+     │                              /breeze skill (dashboard + actions)
+     │                                     ↓
+     │                          claims/<id>/ (agent locks)
+     │                                     ↓
+     └──────────  gh label   ←──── apply breeze:{wip,human,done}
 ```
+
+State lives on GitHub via labels. The local inbox.json is just a cache of what GitHub sent us plus the current label-derived status.
 
 ## Vision
 
 breeze v1 is the read path: see notifications, act on them with AI help.
 
-The north star is full agent autonomy. The agent handles 90% of your GitHub interactions, only escalates to you when human judgment is needed. High-confidence actions (docs PRs, duplicates) are auto-handled with an undo option. Medium-confidence actions get a suggestion. Low-confidence items are escalated with full context.
+The north star is full agent autonomy. The agent handles 90% of your GitHub interactions, only escalates to you when human judgment is needed. High-confidence actions are auto-handled with undo. Medium-confidence actions get a suggestion. Low-confidence items get labeled `breeze:human` and escalated with full context.
 
-See [DESIGN.md](DESIGN.md) for the full architecture and status system design.
+See [DESIGN.md](DESIGN.md) for the full architecture.
 
 ## License
 

@@ -187,103 +187,96 @@ Full enrichment (PR diff, comment thread, issue body) is fetched on-demand, not 
 
 ## Notification Status System
 
-Breeze tracks its own status per notification, independent of GitHub's read/unread.
-This is the foundation for agent autonomy — agents need to know what's been handled,
-what's in progress, and what needs human judgment.
+Status lives on **GitHub as labels**, not in a local file. The source of truth is GitHub. This means:
 
-### Five States
+- State is visible on github.com (you can see what breeze is working on)
+- State is visible to your team (if they see `breeze:wip`, they know not to duplicate effort)
+- State survives if you reinstall breeze or switch machines
+- Other tools (CI, bots, teammates) can read/write the same labels
+
+### Four States
 
 ```
-                    ┌─────────────────────────────────────────────┐
-                    │                                             │
-                    ▼                                             │
-  [new notif] → ( open ) ──→ ( claimed ) ──→ ( resolved )        │
-                  │  ▲          │    ▲           │                │
-                  │  │          │    │           │ new activity   │
-                  │  │  timeout │    │ extend    │ on GitHub      │
-                  │  │  (5 min) │    │           └────────────────┘
-                  │  │          ▼    │
-                  │  └──────────┘    │
-                  │                  │
-                  │  ┌───────────────┘
-                  │  │ new activity
-                  │  │
-                  ▼  │
-              ( pending ) ── agent acted, waiting on someone else
-                  │
-                  │ new activity
-                  ▼
-               ( open )
+  [new notif]  →  ( new )  →  ( wip )  →  ( done )
+                     │           ↓
+                     └──→  ( human )
+                             │
+                             └──→  human decides,
+                                   marks done or hands
+                                   back to agent
 
-              ( snoozed ) ── human said "not now"
-                  │
-                  │ timer expires OR new activity
-                  ▼
-               ( open )
+  Merged/closed PR/Issue  →  auto-done (no label needed)
 ```
 
-| Status | Who sees it | Meaning | Example |
-|--------|------------|---------|---------|
-| **open** | Statusline, agents, humans | Needs action, no one's on it | New PR review request just arrived |
-| **claimed** | Claimed agent only | Locked, someone is actively working | Agent is reading diff and writing review |
-| **pending** | Hidden from statusline | Agent acted, waiting on external response | Requested changes, waiting for author to push |
-| **snoozed** | Hidden from statusline | Human deferred it | "Snooze for 3 days" on a feature request |
-| **resolved** | Hidden from statusline | Done, no action needed | PR approved, issue closed |
+| Status | GitHub Label | Meaning | In statusline? |
+|--------|-------------|---------|----------------|
+| **new** | *(none)* | Needs action, no one's on it | Yes |
+| **wip** | `breeze:wip` | Agent or human is actively working | No |
+| **human** | `breeze:human` | Escalated — needs human judgment | No |
+| **done** | `breeze:done` or merged/closed on GitHub | Handled | No |
 
-### Statusline only shows `open` count
+The statusline only counts `new` notifications. PRs that are merged or issues that are closed are treated as `done` automatically — no label required.
+
+### Statusline only shows `new` count
 
 ```
 /breeze: 12 PRs · 3 issues · 1 discussion
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-         only open notifications counted
+         only new notifications counted
 ```
 
 ### Claim Mechanism (Agent Lock)
 
-Uses filesystem-based atomic locks to prevent two agents from handling the same notification:
+Labels are the persistent status, but agents need sub-second locks to prevent race conditions when two agents simultaneously pick the same notification. breeze uses filesystem-based atomic locks at `~/.breeze/claims/<notification-id>/`:
 
 ```
 ~/.breeze/claims/<notification-id>/
     claimed_by    — agent session ID
     claimed_at    — ISO timestamp
-    action        — what the agent is doing ("reviewing PR", "commenting on issue")
+    action        — what the agent is doing
 ```
 
 - **Claim:** `mkdir ~/.breeze/claims/<id>` (atomic on POSIX, fails if already exists)
 - **Release:** `rm -rf ~/.breeze/claims/<id>` after action completes
 - **Timeout:** If `claimed_at` is older than 5 minutes, any agent can reclaim (the previous agent crashed)
-- **Extend:** Agent writes a new `claimed_at` if its action takes longer than expected
 
-### Status Storage (`~/.breeze/status.json`)
+Claims are local (one laptop) and ephemeral (5 min). Labels are on GitHub and persistent. They work together: claim → do the work → set the label → release the claim.
+
+### Reading Status
+
+The poller reads breeze labels on each notification and enriches inbox.json with a `breeze_status` field:
 
 ```json
 {
-  "<notification-id>": {
-    "status": "pending",
-    "changed_at": "2026-04-14T16:05:00Z",
-    "changed_by": "agent-session-abc123",
-    "reason": "Requested changes on PR, waiting for author",
-    "snooze_until": null,
-    "github_updated_at": "2026-04-14T16:00:00Z"
-  }
+  "id": "123456",
+  "type": "PullRequest",
+  "repo": "owner/repo",
+  "title": "Fix auth",
+  "breeze_status": "wip",
+  "state": "OPEN",
+  ...
 }
 ```
 
-- Notifications NOT in status.json are implicitly `open`
-- `github_updated_at` records what `updated_at` was when the status was set
-- The poller compares this against the current GitHub `updated_at` to detect new activity
-- Resolved entries are kept for 7 days (audit trail), then garbage collected
+If a PR is merged or closed, `breeze_status` is set to `done` automatically (GitHub's state overrides labels).
 
-### Poller State Machine
+### Writing Status
 
-On each poll cycle, the poller reads status.json and detects transitions:
+When the user or agent changes status via `/breeze`, the status-manager:
+1. Removes any existing `breeze:*` labels on the PR/issue
+2. Adds the new label (creating it on the repo first if it doesn't exist)
+3. Updates the local inbox.json cache for immediate feedback (before next poll)
+4. Logs the transition to activity.log
 
-1. **resolved + new activity** (GitHub `updated_at` > `github_updated_at`) → back to `open`
-2. **pending + new activity** → back to `open` (the thing you were waiting for happened)
-3. **snoozed + new activity** → back to `open` (new info overrides snooze)
-4. **snoozed + timer expired** (`snooze_until` < now) → back to `open`
-5. **claimed + timeout** (5 min) → back to `open` (agent crashed)
-6. **claimed + new activity** → stay `claimed` (let the active agent handle it)
+### Label Management
+
+breeze creates labels on-demand — the first time you mark something `wip` on a new repo, the `breeze:wip` label is created automatically. You can also bulk-create all labels on a repo:
+
+```bash
+breeze-status-manager ensure-labels owner/repo
+```
+
+Labels use distinct colors: `breeze:new` (blue), `breeze:wip` (yellow), `breeze:human` (orange), `breeze:done` (green).
 
 ### Agent Autonomy UX
 
@@ -307,7 +300,7 @@ Agent assesses: can I handle this?
 │ │         pass, trusted contributor         │    │
 │ │ [Undo] [View on GitHub]                   │    │
 │ └──────────────────────────────────────────┘    │
-│ → status: resolved                               │
+│ → label: breeze:done                             │
 └─────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────┐
@@ -324,7 +317,7 @@ Agent assesses: can I handle this?
 │ │ Confidence: 60%                           │    │
 │ │ [Approve suggestion] [Override] [Skip]    │    │
 │ └──────────────────────────────────────────┘    │
-│ → status: open (human decides)                   │
+│ → status: new (human decides)                    │
 └─────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────┐
@@ -338,9 +331,9 @@ Agent assesses: can I handle this?
 │ │   module, potential breaking change,       │    │
 │ │   needs domain knowledge I don't have      │    │
 │ │ Context: [full summary loaded]             │    │
-│ │ [Take over] [Snooze] [Assign to someone]  │    │
+│ │ [Take over] [Assign to someone]           │    │
 │ └──────────────────────────────────────────┘    │
-│ → status: open (human must act)                  │
+│ → label: breeze:human                            │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -349,14 +342,14 @@ Agent assesses: can I handle this?
 When the human opens `/breeze`, they see a dashboard:
 
 ```
-/breeze inbox — 15 open · 3 claimed · 5 pending · 1 snoozed
+/breeze inbox — 15 new · 3 wip · 5 human · 50 done
 
 AGENT ACTIVITY (last 24h):
-  Resolved: 8 notifications
-  Escalated: 2 (needed human judgment)
-  Pending: 5 (waiting on others)
+  Marked done: 8 notifications
+  Escalated to human: 2
+  Still wip: 3
 
-NEEDS YOUR ATTENTION (open):
+NEEDS YOUR ATTENTION (new):
   1. [PR] paperclip-tree #305 — add OAuth (suggestion: request changes) 60%
   2. [Issue] first-tree #90 — security vuln (escalation) 20%
   ...
