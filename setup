@@ -71,6 +71,24 @@ chmod +x "$SCRIPT_DIR/bin/breeze-status"
 echo "  OK"
 echo ""
 
+# Detect Rust toolchain — if present, prefer the unified breeze-runner daemon
+# over the legacy shell poller.
+USE_RUNNER=0
+RUNNER_BIN=""
+if command -v cargo &>/dev/null; then
+  echo "Building breeze-runner (release)..."
+  if cargo build --release --manifest-path "$SCRIPT_DIR/breeze-runner/Cargo.toml" 2>&1 | tail -5; then
+    RUNNER_BIN="$SCRIPT_DIR/breeze-runner/target/release/breeze-runner"
+    if [ -x "$RUNNER_BIN" ]; then
+      USE_RUNNER=1
+      echo "  breeze-runner built at $RUNNER_BIN"
+    fi
+  else
+    echo "  WARN: cargo build failed; falling back to shell poller"
+  fi
+  echo ""
+fi
+
 # 4. Install skill symlink
 echo "Installing Claude Code skill..."
 mkdir -p "$SKILL_DIR"
@@ -91,19 +109,60 @@ ln -s "$SCRIPT_DIR/skill-upgrade" "$SKILL_DIR/breeze-upgrade"
 echo "  Symlinked $SKILL_DIR/breeze-upgrade -> $SCRIPT_DIR/skill-upgrade"
 echo ""
 
-# 5. Install poller (platform-specific)
-echo "Installing poller..."
+# 5. Install service (platform-specific)
+echo "Installing service..."
 
 if [ "$(uname)" = "Darwin" ]; then
-  # macOS: launchd plist
   PLIST_DIR="$HOME/Library/LaunchAgents"
-  PLIST_FILE="$PLIST_DIR/com.breeze.poll.plist"
   mkdir -p "$PLIST_DIR"
 
-  # Unload existing if present
-  launchctl unload "$PLIST_FILE" 2>/dev/null || true
+  # Always clean up any prior breeze-poll plist — the runner supersedes it.
+  LEGACY_PLIST="$PLIST_DIR/com.breeze.poll.plist"
+  if [ -f "$LEGACY_PLIST" ]; then
+    launchctl unload "$LEGACY_PLIST" 2>/dev/null || true
+    rm -f "$LEGACY_PLIST"
+    echo "  Removed legacy com.breeze.poll.plist"
+  fi
 
-  cat > "$PLIST_FILE" << EOF
+  if [ "$USE_RUNNER" = "1" ]; then
+    PLIST_FILE="$PLIST_DIR/com.breeze.runner.plist"
+    launchctl unload "$PLIST_FILE" 2>/dev/null || true
+    cat > "$PLIST_FILE" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.breeze.runner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$RUNNER_BIN</string>
+    <string>run</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$BREEZE_DIR/runner.log</string>
+  <key>StandardErrorPath</key>
+  <string>$BREEZE_DIR/runner-error.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>BREEZE_DIR</key>
+    <string>$BREEZE_DIR</string>
+  </dict>
+</dict>
+</plist>
+EOF
+    launchctl load "$PLIST_FILE"
+    echo "  Installed unified daemon plist at $PLIST_FILE"
+    echo "  Dashboard: http://127.0.0.1:7878"
+  else
+    PLIST_FILE="$PLIST_DIR/com.breeze.poll.plist"
+    cat > "$PLIST_FILE" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -131,16 +190,20 @@ if [ "$(uname)" = "Darwin" ]; then
 </dict>
 </plist>
 EOF
-
-  launchctl load "$PLIST_FILE"
-  echo "  Installed launchd plist at $PLIST_FILE"
-  echo "  Poller runs every 3 minutes, survives session end"
+    launchctl load "$PLIST_FILE"
+    echo "  Installed legacy shell poller at $PLIST_FILE"
+    echo "  (install Rust + cargo and re-run setup for the unified daemon + dashboard)"
+  fi
 
 else
-  # Linux: crontab
+  # Linux: crontab — shell poller path. systemd unit for the runner is out
+  # of scope here; run \`breeze-runner start\` manually for now.
   CRON_CMD="* * * * * /bin/bash $SCRIPT_DIR/bin/breeze-poll >> $BREEZE_DIR/poll.log 2>&1"
   (crontab -l 2>/dev/null | grep -v breeze-poll; echo "$CRON_CMD") | crontab -
-  echo "  Installed crontab entry (every 3 minutes)"
+  echo "  Installed crontab entry (every minute)"
+  if [ "$USE_RUNNER" = "1" ]; then
+    echo "  For the unified daemon + dashboard, also run: $RUNNER_BIN start"
+  fi
 fi
 echo ""
 
@@ -191,7 +254,11 @@ echo ""
 
 # 7. Run initial poll
 echo "Running initial poll..."
-bash "$SCRIPT_DIR/bin/breeze-poll"
+if [ "$USE_RUNNER" = "1" ]; then
+  "$RUNNER_BIN" poll || true
+else
+  bash "$SCRIPT_DIR/bin/breeze-poll"
+fi
 echo ""
 
 # 8. Show status
@@ -200,14 +267,26 @@ echo ""
 echo "  Inbox:     $BREEZE_DIR/inbox.json"
 echo "  Config:    $BREEZE_DIR/config.yaml"
 echo "  Skill:     $SKILL_DIR/breeze"
-echo "  Logs:      $BREEZE_DIR/poll.log"
+if [ "$USE_RUNNER" = "1" ]; then
+  echo "  Logs:      $BREEZE_DIR/runner.log"
+  echo "  Dashboard: http://127.0.0.1:7878"
+else
+  echo "  Logs:      $BREEZE_DIR/poll.log"
+fi
 echo ""
 echo "Usage:"
 echo "  /breeze          — open your notification inbox in Claude Code"
+if [ "$USE_RUNNER" = "1" ]; then
+  echo "  open http://127.0.0.1:7878   — live dashboard in your browser"
+fi
 echo ""
-echo "To stop the poller:"
+echo "To stop the service:"
 if [ "$(uname)" = "Darwin" ]; then
-  echo "  launchctl unload ~/Library/LaunchAgents/com.breeze.poll.plist"
+  if [ "$USE_RUNNER" = "1" ]; then
+    echo "  launchctl unload ~/Library/LaunchAgents/com.breeze.runner.plist"
+  else
+    echo "  launchctl unload ~/Library/LaunchAgents/com.breeze.poll.plist"
+  fi
 else
   echo "  crontab -e  (remove the breeze-poll line)"
 fi

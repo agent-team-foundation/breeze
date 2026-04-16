@@ -26,7 +26,8 @@ cd breeze
 
 The setup script:
 - Creates `~/.breeze/` for local cache (inbox.json, activity log, claim locks)
-- Installs a launchd plist (macOS) or crontab entry (Linux) to poll every 60 seconds
+- Builds the unified `breeze-runner` daemon (if Rust is installed) and installs a launchd plist that keeps it running. It refreshes `inbox.json` every 60s, dispatches agents on actionable items, and serves a live dashboard on `http://127.0.0.1:7878`
+- Falls back to a legacy shell-poll launchd entry on macOS / crontab entry on Linux when Rust is unavailable
 - Symlinks the `/breeze`, `/breeze-watch`, `/breeze-upgrade` skills into `~/.claude/skills/`
 - Chains breeze into your existing Claude Code statusline (doesn't replace it)
 - Runs an initial poll
@@ -35,6 +36,7 @@ The setup script:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated with `repo` scope
 - [jq](https://jqlang.github.io/jq/) installed
+- Rust toolchain (`cargo`) — *recommended*, enables the unified daemon and browser dashboard
 - Claude Code
 
 ## Commands
@@ -42,6 +44,7 @@ The setup script:
 - **`/breeze`** — open the inbox dashboard, pick a notification, act on it
 - **`/breeze-watch`** — live activity log with clickable GitHub links, in a new terminal window
 - **`/breeze-upgrade`** — pull the latest code (no restart needed)
+- **`http://127.0.0.1:7878`** — live web dashboard (when the unified daemon is installed)
 
 ## Usage
 
