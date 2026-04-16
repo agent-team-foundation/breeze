@@ -117,9 +117,9 @@ impl RunnerSpec {
                 }
                 command
                     .env("PATH", &path)
-                    .env("GITHUBER_BROKER_DIR", &request.gh_broker_dir)
-                    .env("GITHUBER_SNAPSHOT_DIR", &request.snapshot_dir)
-                    .env("GITHUBER_TASK_DIR", &request.task_dir);
+                    .env("BREEZE_BROKER_DIR", &request.gh_broker_dir)
+                    .env("BREEZE_SNAPSHOT_DIR", &request.snapshot_dir)
+                    .env("BREEZE_TASK_DIR", &request.task_dir);
                 command.arg(&prompt_path);
                 command.stdout(Stdio::from(stdout_file));
                 command.stderr(Stdio::from(stderr_file));
@@ -137,9 +137,9 @@ impl RunnerSpec {
                 }
                 command
                     .env("PATH", &path)
-                    .env("GITHUBER_BROKER_DIR", &request.gh_broker_dir)
-                    .env("GITHUBER_SNAPSHOT_DIR", &request.snapshot_dir)
-                    .env("GITHUBER_TASK_DIR", &request.task_dir);
+                    .env("BREEZE_BROKER_DIR", &request.gh_broker_dir)
+                    .env("BREEZE_SNAPSHOT_DIR", &request.snapshot_dir)
+                    .env("BREEZE_TASK_DIR", &request.task_dir);
                 command.arg(&prompt);
                 command.stdout(Stdio::from(stdout_file));
                 command.stderr(Stdio::from(stderr_file));
@@ -177,10 +177,10 @@ fn build_prompt(request: &RunnerRequest) -> String {
         String::new()
     };
     format!(
-        "This is GitHuber service and you are a team of agents representing {git_id}.
+        "This is breeze and you are a team of agents representing {git_id}.
 
-This is GitHuber service code repo:
-https://github.com/bingran-you/bingran-you/tree/main/scripts/breeze-runner
+This is breeze's code repo:
+https://github.com/agent-team-foundation/breeze
 
 Your job is addressing any comments / discussions / review request / task request / pull request etc. (basically any GitHub notifications) related to GitHub id: {git_id}. When reviewing pull requests, follow the principle here: https://google.github.io/eng-practices/review/
 
@@ -206,7 +206,7 @@ Read the local snapshot files first. Only call `gh` when you need fresh data or 
 If you post a public GitHub reply, review, or comment, include this exact disclosure sentence once: {disclosure}
 
 When you are done, finish with exactly one line in this format:
-GITHUBER_RESULT: status=<handled|skipped|failed> summary=<one-line summary>",
+BREEZE_RESULT: status=<handled|skipped|failed> summary=<one-line summary>",
         git_id = request.identity.login,
         task_id = request.task_id,
         repo = task.repo,
@@ -223,10 +223,10 @@ GITHUBER_RESULT: status=<handled|skipped|failed> summary=<one-line summary>",
 fn parse_result(output: &str) -> (String, String) {
     for line in output.lines().rev() {
         let line = line.trim();
-        if !line.starts_with("GITHUBER_RESULT:") {
+        if !line.starts_with("BREEZE_RESULT:") {
             continue;
         }
-        let payload = line.trim_start_matches("GITHUBER_RESULT:").trim();
+        let payload = line.trim_start_matches("BREEZE_RESULT:").trim();
         let status = payload
             .split_whitespace()
             .find_map(|part| part.strip_prefix("status="))
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn parse_machine_result_line() {
         let (status, summary) =
-            parse_result("done\nGITHUBER_RESULT: status=handled summary=reviewed and replied");
+            parse_result("done\nBREEZE_RESULT: status=handled summary=reviewed and replied");
         assert_eq!(status, "handled");
         assert_eq!(summary, "reviewed and replied");
     }

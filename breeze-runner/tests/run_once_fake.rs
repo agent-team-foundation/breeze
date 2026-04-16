@@ -34,7 +34,7 @@ fn run_once_schedules_fake_notification_end_to_end() {
         &bin_dir.join("gh"),
         r#"#!/bin/sh
 set -eu
-printf 'gh %s\n' "$*" >> "$GITHUBER_CALLS"
+printf 'gh %s\n' "$*" >> "$BREEZE_CALLS"
 case "$*" in
   *"auth status"*)
     printf 'github.com\tbingran-you\thttps\trepo,workflow\n'
@@ -52,7 +52,7 @@ case "$*" in
     printf ''
     ;;
   *"issue comment"*)
-    printf 'gh-action %s\n' "$*" >> "$GITHUBER_ACTIONS"
+    printf 'gh-action %s\n' "$*" >> "$BREEZE_ACTIONS"
     ;;
   *)
     printf ''
@@ -65,7 +65,7 @@ esac
         &bin_dir.join("git"),
         r#"#!/bin/sh
 set -eu
-printf 'git %s\n' "$*" >> "$GITHUBER_CALLS"
+printf 'git %s\n' "$*" >> "$BREEZE_CALLS"
 if [ "${1:-}" = "-c" ]; then
   shift 2
 fi
@@ -107,9 +107,9 @@ exit 0
         &bin_dir.join("codex"),
         r#"#!/bin/sh
 set -eu
-printf 'codex %s\n' "$*" >> "$GITHUBER_CALLS"
+printf 'codex %s\n' "$*" >> "$BREEZE_CALLS"
 resolved_gh="$(command -v gh)"
-expected_gh="$GITHUBER_BROKER_DIR/bin/gh"
+expected_gh="$BREEZE_BROKER_DIR/bin/gh"
 if [ "$resolved_gh" != "$expected_gh" ]; then
   echo "expected brokered gh at $expected_gh, got $resolved_gh" >&2
   exit 1
@@ -122,8 +122,8 @@ for arg in "$@"; do
   fi
   prev="$arg"
 done
-gh issue comment owner/repo#1 --body "Agent note: this reply was prepared and posted by breeze-runner running locally for the active account."
-printf 'GITHUBER_RESULT: status=handled summary=fake codex handled thread\n' > "$out"
+gh issue comment owner/repo#1 --body "Agent note: this reply was prepared and posted by breeze running locally for the active account."
+printf 'BREEZE_RESULT: status=handled summary=fake codex handled thread\n' > "$out"
 "#,
     );
 
@@ -134,9 +134,9 @@ printf 'GITHUBER_RESULT: status=handled summary=fake codex handled thread\n' > "
     );
     let output = Command::new(env!("CARGO_BIN_EXE_breeze-runner"))
         .env("PATH", path)
-        .env("GITHUBER_HOME", &home_dir)
-        .env("GITHUBER_CALLS", &calls_path)
-        .env("GITHUBER_ACTIONS", &actions_path)
+        .env("BREEZE_HOME", &home_dir)
+        .env("BREEZE_CALLS", &calls_path)
+        .env("BREEZE_ACTIONS", &actions_path)
         .args(["run-once", "--runner", "codex", "--host", "github.com"])
         .output()
         .expect("breeze-runner should run");
@@ -190,7 +190,7 @@ fn second_run_uses_notifications_hot_path_without_repeating_search() {
         &bin_dir.join("gh"),
         r#"#!/bin/sh
 set -eu
-printf 'gh %s\n' "$*" >> "$GITHUBER_CALLS"
+printf 'gh %s\n' "$*" >> "$BREEZE_CALLS"
 case "$*" in
   *"auth status"*)
     printf 'github.com\tbingran-you\thttps\trepo,workflow\n'
@@ -208,7 +208,7 @@ case "$*" in
     printf ''
     ;;
   *"issue comment"*)
-    printf 'gh-action %s\n' "$*" >> "$GITHUBER_ACTIONS"
+    printf 'gh-action %s\n' "$*" >> "$BREEZE_ACTIONS"
     ;;
   *)
     printf ''
@@ -263,7 +263,7 @@ exit 0
         r#"#!/bin/sh
 set -eu
 resolved_gh="$(command -v gh)"
-expected_gh="$GITHUBER_BROKER_DIR/bin/gh"
+expected_gh="$BREEZE_BROKER_DIR/bin/gh"
 if [ "$resolved_gh" != "$expected_gh" ]; then
   echo "expected brokered gh at $expected_gh, got $resolved_gh" >&2
   exit 1
@@ -276,8 +276,8 @@ for arg in "$@"; do
   fi
   prev="$arg"
 done
-gh issue comment owner/repo#1 --body "Agent note: this reply was prepared and posted by breeze-runner running locally for the active account."
-printf 'GITHUBER_RESULT: status=handled summary=fake codex handled thread\n' > "$out"
+gh issue comment owner/repo#1 --body "Agent note: this reply was prepared and posted by breeze running locally for the active account."
+printf 'BREEZE_RESULT: status=handled summary=fake codex handled thread\n' > "$out"
 "#,
     );
 
@@ -290,9 +290,9 @@ printf 'GITHUBER_RESULT: status=handled summary=fake codex handled thread\n' > "
     let run = || {
         Command::new(env!("CARGO_BIN_EXE_breeze-runner"))
             .env("PATH", &path)
-            .env("GITHUBER_HOME", &home_dir)
-            .env("GITHUBER_CALLS", &calls_path)
-            .env("GITHUBER_ACTIONS", &actions_path)
+            .env("BREEZE_HOME", &home_dir)
+            .env("BREEZE_CALLS", &calls_path)
+            .env("BREEZE_ACTIONS", &actions_path)
             .args(["run-once", "--runner", "codex", "--host", "github.com"])
             .output()
             .expect("breeze-runner should run")
@@ -367,7 +367,7 @@ started_at=1
         &bin_dir.join("gh"),
         r#"#!/bin/sh
 set -eu
-printf 'gh %s\n' "$*" >> "$GITHUBER_CALLS"
+printf 'gh %s\n' "$*" >> "$BREEZE_CALLS"
 case "$*" in
   *"auth status"*)
     printf 'github.com\tbingran-you\thttps\trepo,workflow\n'
@@ -382,7 +382,7 @@ case "$*" in
     printf ''
     ;;
   *"issue comment"*)
-    printf 'gh-action %s\n' "$*" >> "$GITHUBER_ACTIONS"
+    printf 'gh-action %s\n' "$*" >> "$BREEZE_ACTIONS"
     ;;
   *)
     printf ''
@@ -440,7 +440,7 @@ exit 0
         r#"#!/bin/sh
 set -eu
 resolved_gh="$(command -v gh)"
-expected_gh="$GITHUBER_BROKER_DIR/bin/gh"
+expected_gh="$BREEZE_BROKER_DIR/bin/gh"
 if [ "$resolved_gh" != "$expected_gh" ]; then
   echo "expected brokered gh at $expected_gh, got $resolved_gh" >&2
   exit 1
@@ -454,7 +454,7 @@ for arg in "$@"; do
   prev="$arg"
 done
 gh issue comment owner/repo#1 --body "Recovered stale task"
-printf 'GITHUBER_RESULT: status=handled summary=recovered stale task\n' > "$out"
+printf 'BREEZE_RESULT: status=handled summary=recovered stale task\n' > "$out"
 "#,
     );
 
@@ -465,9 +465,9 @@ printf 'GITHUBER_RESULT: status=handled summary=recovered stale task\n' > "$out"
     );
     let output = Command::new(env!("CARGO_BIN_EXE_breeze-runner"))
         .env("PATH", path)
-        .env("GITHUBER_HOME", &home_dir)
-        .env("GITHUBER_CALLS", &calls_path)
-        .env("GITHUBER_ACTIONS", &actions_path)
+        .env("BREEZE_HOME", &home_dir)
+        .env("BREEZE_CALLS", &calls_path)
+        .env("BREEZE_ACTIONS", &actions_path)
         .args(["run-once", "--runner", "codex", "--host", "github.com"])
         .output()
         .expect("breeze-runner should run");
@@ -510,7 +510,7 @@ fn run_once_ignores_notifications_older_than_lookback_window() {
         &bin_dir.join("gh"),
         r#"#!/bin/sh
 set -eu
-printf 'gh %s\n' "$*" >> "$GITHUBER_CALLS"
+printf 'gh %s\n' "$*" >> "$BREEZE_CALLS"
 case "$*" in
   *"auth status"*)
     printf 'github.com\tbingran-you\thttps\trepo,workflow\n'
@@ -525,7 +525,7 @@ case "$*" in
     printf ''
     ;;
   *"issue comment"*)
-    printf 'gh-action %s\n' "$*" >> "$GITHUBER_ACTIONS"
+    printf 'gh-action %s\n' "$*" >> "$BREEZE_ACTIONS"
     ;;
   *)
     printf ''
@@ -546,7 +546,7 @@ exit 0
         &bin_dir.join("codex"),
         r#"#!/bin/sh
 set -eu
-printf 'codex %s\n' "$*" >> "$GITHUBER_CALLS"
+printf 'codex %s\n' "$*" >> "$BREEZE_CALLS"
 exit 1
 "#,
     );
@@ -558,9 +558,9 @@ exit 1
     );
     let output = Command::new(env!("CARGO_BIN_EXE_breeze-runner"))
         .env("PATH", path)
-        .env("GITHUBER_HOME", &home_dir)
-        .env("GITHUBER_CALLS", &calls_path)
-        .env("GITHUBER_ACTIONS", &actions_path)
+        .env("BREEZE_HOME", &home_dir)
+        .env("BREEZE_CALLS", &calls_path)
+        .env("BREEZE_ACTIONS", &actions_path)
         .args(["run-once", "--runner", "codex", "--host", "github.com"])
         .output()
         .expect("breeze-runner should run");

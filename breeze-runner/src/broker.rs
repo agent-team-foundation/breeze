@@ -390,7 +390,7 @@ fn write_failure_response(request_dir: &Path, error: &str) -> AppResult<()> {
 const SHIM_SCRIPT: &str = r#"#!/bin/sh
 set -eu
 
-broker_dir="${GITHUBER_BROKER_DIR:?missing GITHUBER_BROKER_DIR}"
+broker_dir="${BREEZE_BROKER_DIR:?missing BREEZE_BROKER_DIR}"
 requests_dir="$broker_dir/requests"
 mkdir -p "$requests_dir"
 
@@ -419,7 +419,7 @@ if [ -n "${GH_REPO:-}" ]; then
   printf '%s' "$GH_REPO" > "$request_dir/gh_repo.txt"
 fi
 
-timeout_secs="${GITHUBER_BROKER_TIMEOUT_SECS:-1800}"
+timeout_secs="${BREEZE_BROKER_TIMEOUT_SECS:-1800}"
 deadline=$(( $(date +%s) + timeout_secs ))
 while [ ! -f "$request_dir/response.env" ]; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn shim_script_references_broker_dir() {
-        assert!(SHIM_SCRIPT.contains("GITHUBER_BROKER_DIR"));
+        assert!(SHIM_SCRIPT.contains("BREEZE_BROKER_DIR"));
         assert!(SHIM_SCRIPT.contains("argv.txt"));
     }
 
