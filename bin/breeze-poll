@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # breeze-poll — polls GitHub notifications and enriches with labels via GraphQL
 # Writes to ~/.breeze/inbox.json with breeze_status field per notification
+#
+# DEPRECATED: prefer `breeze-runner poll` (one-shot) or `breeze-runner run`
+# (long-lived daemon with live dashboard on http://127.0.0.1:7878). This shell
+# script is kept as a portable fallback for hosts without Rust toolchain and
+# as a debugging tool; setup prefers the Rust runner when cargo is available.
 set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/bin:$PATH"

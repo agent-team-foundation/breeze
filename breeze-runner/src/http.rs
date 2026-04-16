@@ -78,12 +78,34 @@ fn handle_connection(
     let request_line = request.request_line.clone();
     let route = parse_route(&request_line);
     match route {
+        Route::Dashboard => write_dashboard(stream),
         Route::Healthz => write_plain(stream, 200, "ok\n"),
         Route::Inbox => write_json_file(stream, &inbox_dir.join("inbox.json")),
         Route::Activity => write_activity_tail(stream, &inbox_dir.join("activity.log"), 200),
         Route::Events => stream_events(stream, bus, stop),
         Route::NotFound => write_plain(stream, 404, "not found\n"),
     }
+}
+
+const DASHBOARD_HTML: &str = include_str!("dashboard.html");
+
+fn write_dashboard(mut stream: TcpStream) -> AppResult<()> {
+    let body = DASHBOARD_HTML;
+    let response = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {len}\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\
+         \r\n",
+        len = body.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .map_err(|error| app_error(format!("dashboard header write failed: {error}")))?;
+    stream
+        .write_all(body.as_bytes())
+        .map_err(|error| app_error(format!("dashboard body write failed: {error}")))
 }
 
 #[derive(Debug)]
@@ -115,6 +137,7 @@ fn read_request_line(stream: &TcpStream) -> AppResult<RequestHead> {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Route {
+    Dashboard,
     Healthz,
     Inbox,
     Activity,
@@ -135,6 +158,7 @@ fn parse_route(request_line: &str) -> Route {
     };
     let path = raw_path.split('?').next().unwrap_or(raw_path);
     match path {
+        "/" | "/dashboard" | "/index.html" => Route::Dashboard,
         "/healthz" => Route::Healthz,
         "/inbox" => Route::Inbox,
         "/activity" => Route::Activity,
@@ -330,6 +354,9 @@ mod tests {
         assert_eq!(parse_route("GET /inbox HTTP/1.1"), Route::Inbox);
         assert_eq!(parse_route("GET /activity HTTP/1.1"), Route::Activity);
         assert_eq!(parse_route("GET /events HTTP/1.1"), Route::Events);
+        assert_eq!(parse_route("GET / HTTP/1.1"), Route::Dashboard);
+        assert_eq!(parse_route("GET /dashboard HTTP/1.1"), Route::Dashboard);
+        assert_eq!(parse_route("GET /index.html HTTP/1.1"), Route::Dashboard);
         assert_eq!(parse_route("GET /inbox?all=1 HTTP/1.1"), Route::Inbox);
         assert_eq!(parse_route("POST /inbox HTTP/1.1"), Route::NotFound);
         assert_eq!(parse_route("GET /nope HTTP/1.1"), Route::NotFound);
