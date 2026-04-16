@@ -6,6 +6,16 @@ Repo: agent-team-foundation/breeze-demo
 Status: APPROVED
 Mode: Builder
 
+## Vision
+
+GitHub goes agent-first.
+
+Your agent talks to their agent. They handle the PRs, the comments, the issues, the discussions. They negotiate reviews, close dupes, push stuff through CI, ping you when it matters.
+
+Agents handle 99%. Humans see 1%.
+
+That 1% is the part that needs you — real decisions, real judgment. Everything else was never your job, you just got stuck doing it.
+
 ## Problem Statement
 
 Developers using Claude Code have no way to see and act on GitHub notifications from within their working session. They context-switch to email, GitHub web UI, or mobile to check PRs, issues, discussions, and review requests. When they see something that needs a response, they can't immediately use their AI coding agent to help. For open source maintainers, this is worse: they're bottlenecks on their own repos, manually triaging dozens of notifications per day.
@@ -15,8 +25,6 @@ breeze brings GitHub notifications into Claude Code, shows them in the statuslin
 ## What Makes This Cool
 
 The notification inbox is the trojan horse. The real product is an autonomous GitHub presence that acts on your behalf. Existing tools (CodeRabbit, PR Agent, Hivemoot) are all cloud-hosted or GitHub Actions. None live inside your working session where the agent has your codebase context, conversation history, and intent.
-
-The north star: agent handles 90% of your GitHub interactions autonomously. You just review the 10% that need human judgment. The v1 proves the interaction model. The agent evolution comes next.
 
 ## Constraints
 

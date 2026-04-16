@@ -116,11 +116,15 @@ State lives on GitHub via labels. The local inbox.json is just a cache of what G
 
 ## Vision
 
-breeze v1 is the read path: see notifications, act on them with AI help.
+GitHub goes agent-first.
 
-The north star is full agent autonomy. The agent handles 90% of your GitHub interactions, only escalates to you when human judgment is needed. High-confidence actions are auto-handled with undo. Medium-confidence actions get a suggestion. Low-confidence items get labeled `breeze:human` and escalated with full context.
+Your agent talks to their agent. They handle the PRs, the comments, the issues, the discussions. They negotiate reviews, close dupes, push stuff through CI, ping you when it matters.
 
-See [DESIGN.md](DESIGN.md) for the full architecture.
+Agents handle 99%. Humans see 1%.
+
+That 1% is the part that needs you — real decisions, real judgment. Everything else was never your job, you just got stuck doing it.
+
+breeze is how we get there. See [DESIGN.md](DESIGN.md) for the architecture.
 
 ## License
 
