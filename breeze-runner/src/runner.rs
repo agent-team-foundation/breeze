@@ -203,6 +203,16 @@ If you find a task / message has already been replied by {git_id}, then you can 
 
 Read the local snapshot files first. Only call `gh` when you need fresh data or to publish the final result.
 
+Status labeling rule (REQUIRED): label the issue / pull request with your current status using exactly one of:
+- `breeze:wip` — you are actively working on it
+- `breeze:human` — you need human input or judgment to proceed
+- `breeze:done` — you have finished handling it
+
+Apply the label via `gh`, for example:
+  gh issue edit <number> --repo <owner>/<repo> --add-label \"breeze:<status>\"
+  gh pr edit   <number> --repo <owner>/<repo> --add-label \"breeze:<status>\"
+Remove any previous `breeze:*` label when the status changes so only one `breeze:*` label remains on the item. Set `breeze:wip` as soon as you start real work, and set `breeze:done` or `breeze:human` before you stop.
+
 If you post a public GitHub reply, review, or comment, include this exact disclosure sentence once: {disclosure}
 
 When you are done, finish with exactly one line in this format:
