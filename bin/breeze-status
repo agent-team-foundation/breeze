@@ -32,11 +32,11 @@ CURRENT_POLL=$(jq -r '.last_poll' "$INBOX" 2>/dev/null || echo "")
 NEW_COUNT=$(jq '[.notifications[] | select(.breeze_status == "new")] | length' "$INBOX" 2>/dev/null || echo "0")
 HUMAN_COUNT=$(jq '[.notifications[] | select(.breeze_status == "human")] | length' "$INBOX" 2>/dev/null || echo "0")
 
-# Build the summary
-# Format: [🔴 N human ·] X PRs · Y issues · Z discussions
+# Build the summary (Option B: needs-you on the left, pulse on the right)
+# Format: [⚠ N need you ·] X PRs · Y issues · Z discussions
 HUMAN_PART=""
 if [ "$HUMAN_COUNT" -gt 0 ]; then
-  HUMAN_PART="🔴 ${HUMAN_COUNT} human · "
+  HUMAN_PART="⚠ ${HUMAN_COUNT} need you · "
 fi
 
 NEW_SUMMARY=$(jq -r '
