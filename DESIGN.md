@@ -225,6 +225,27 @@ Status lives on **GitHub as labels**, not in a local file. The source of truth i
 
 The statusline only counts `new` notifications. PRs that are merged or issues that are closed are treated as `done` automatically — no label required.
 
+### Who sets `breeze:human`
+
+`breeze:human` is labeled by **the agent attempting the work**, not by reviewers.
+
+The signal for escalation comes from reviewer behavior (repeated `CHANGES_REQUESTED`, unclear feedback, or explicit "needs human judgment"), but the action — setting the label — is taken by the agent that tracks context across rounds.
+
+**Why the agent, not the reviewer:**
+
+- Reviewers only know the current PR state, not how many rounds this is
+- The agent is the one that knows "I've tried 5 times and the reviewer still isn't satisfied"
+- Reviewers shouldn't need to count attempts to do their job
+
+**Pattern:**
+
+1. Agent tracks attempts (e.g. HTML marker in PR body: `<!-- agent:attempts=N -->`, or local state)
+2. On each round, agent reads the counter and decides whether to continue or escalate
+3. After N failed rounds (suggested threshold: 5), the agent labels `breeze:human` and comments explaining why
+4. The human reviewer now knows the agent has given up and manual intervention is needed
+
+**The rule:** reviewer behavior provides the signal; the agent takes the action.
+
 ### Statusline only shows `new` count
 
 ```
