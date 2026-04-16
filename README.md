@@ -19,8 +19,8 @@ breeze uses **GitHub labels** to track notification status. The source of truth 
 ## Install
 
 ```bash
-git clone https://github.com/agent-team-foundation/breeze-demo.git
-cd breeze-demo
+git clone https://github.com/agent-team-foundation/breeze.git
+cd breeze
 ./setup
 ```
 
