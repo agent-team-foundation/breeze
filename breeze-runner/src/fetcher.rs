@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::bus::{Bus, Event};
 use crate::config::RepoFilter;
 use crate::gh_executor::{GhBucket, GhCommandSpec, GhExecutor};
 use crate::json::Json;
@@ -49,6 +50,7 @@ pub struct Fetcher {
     host: String,
     inbox_dir: PathBuf,
     repo_filter: RepoFilter,
+    bus: Option<Bus>,
 }
 
 impl Fetcher {
@@ -63,7 +65,13 @@ impl Fetcher {
             host,
             inbox_dir,
             repo_filter,
+            bus: None,
         }
+    }
+
+    pub fn with_bus(mut self, bus: Bus) -> Self {
+        self.bus = Some(bus);
+        self
     }
 
     pub fn inbox_path(&self) -> PathBuf {
@@ -113,6 +121,16 @@ impl Fetcher {
             .iter()
             .filter(|entry| entry.breeze_status == "new")
             .count();
+        if let Some(bus) = &self.bus {
+            bus.publish(Event::InboxUpdated {
+                last_poll: poll_ts.clone(),
+                total: entries.len(),
+                new_count,
+            });
+            for event in &new_events {
+                bus.publish(Event::Activity(event.to_json_line()));
+            }
+        }
         Ok(PollOutcome {
             total: entries.len(),
             new_count,

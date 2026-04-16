@@ -133,6 +133,8 @@ pub struct Config {
     pub claude_model: Option<String>,
     pub disclosure_text: String,
     pub dry_run: bool,
+    pub http_port: u16,
+    pub http_disabled: bool,
 }
 
 impl Config {
@@ -195,6 +197,8 @@ impl Config {
                 .to_string()
         });
         let mut dry_run = parse_bool_env("BREEZE_DRY_RUN").unwrap_or(false);
+        let mut http_port = parse_u16_env("BREEZE_HTTP_PORT").unwrap_or(7878);
+        let mut http_disabled = parse_bool_env("BREEZE_HTTP_DISABLED").unwrap_or(false);
 
         let mut index = 0usize;
         while index < remainder.len() {
@@ -238,6 +242,8 @@ impl Config {
                 "--disclosure" => disclosure_text = next_value(&mut index)?,
                 "--dry-run" => dry_run = true,
                 "--no-dry-run" => dry_run = false,
+                "--http-port" => http_port = parse_u16(&next_value(&mut index)?)?,
+                "--no-http" => http_disabled = true,
                 "--help" | "-h" => return Ok(Self::help()),
                 unknown => return Err(app_error(format!("unknown breeze-runner flag `{unknown}`"))),
             }
@@ -299,6 +305,8 @@ impl Config {
             claude_model,
             disclosure_text,
             dry_run,
+            http_port,
+            http_disabled,
         })
     }
 
@@ -324,6 +332,8 @@ impl Config {
                 "Agent note: this reply was prepared and posted by breeze running locally for the active account."
                     .to_string(),
             dry_run: false,
+            http_port: 7878,
+            http_disabled: false,
         }
     }
 
@@ -364,6 +374,8 @@ FLAGS
   --claude-model <name>          Optional Claude model override
   --disclosure <text>            Disclosure appended to public replies
   --dry-run                      Poll and schedule tasks without launching agents
+  --http-port <n>                Port for the localhost HTTP/SSE server (default: 7878)
+  --no-http                      Disable the localhost HTTP/SSE server
 
 ENV
   BREEZE_HOME
@@ -382,7 +394,9 @@ ENV
   BREEZE_CODEX_MODEL
   BREEZE_CLAUDE_MODEL
   BREEZE_DISCLOSURE
-  BREEZE_DRY_RUN"
+  BREEZE_DRY_RUN
+  BREEZE_HTTP_PORT
+  BREEZE_HTTP_DISABLED"
     }
 }
 
@@ -417,6 +431,12 @@ fn parse_u64_env(name: &str) -> Option<u64> {
         .and_then(|value| value.parse::<u64>().ok())
 }
 
+fn parse_u16_env(name: &str) -> Option<u16> {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+}
+
 fn parse_usize_env(name: &str) -> Option<usize> {
     env::var(name)
         .ok()
@@ -435,6 +455,12 @@ fn parse_u64(value: &str) -> AppResult<u64> {
     value
         .parse::<u64>()
         .map_err(|error| app_error(format!("invalid integer `{value}`: {error}")))
+}
+
+fn parse_u16(value: &str) -> AppResult<u16> {
+    value
+        .parse::<u16>()
+        .map_err(|error| app_error(format!("invalid port `{value}`: {error}")))
 }
 
 fn parse_usize(value: &str) -> AppResult<usize> {
