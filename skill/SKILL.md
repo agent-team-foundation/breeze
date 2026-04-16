@@ -29,7 +29,7 @@ breeze:human, breeze:done) — no local state file needed.
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
 INBOX="$BREEZE_DIR/inbox.json"
 STATUS_MGR=$(find ~/.claude/skills -name breeze-status-manager -type f 2>/dev/null | head -1)
-[ -z "$STATUS_MGR" ] && STATUS_MGR=$(find ~/breeze-demo -name breeze-status-manager -type f 2>/dev/null | head -1)
+[ -z "$STATUS_MGR" ] && STATUS_MGR=$(find ~/breeze -name breeze-status-manager -type f 2>/dev/null | head -1)
 
 # Check gh auth
 if ! gh auth status &>/dev/null; then
@@ -65,7 +65,7 @@ If `AUTH_NEEDED`: Tell the user "breeze requires GitHub CLI authentication. Run 
 If `NO_INBOX`: Offer to fetch notifications on-demand:
 ```bash
 BREEZE_POLL=$(find ~/.claude/skills -name breeze-poll -type f 2>/dev/null | head -1)
-[ -z "$BREEZE_POLL" ] && BREEZE_POLL=$(find ~/breeze-demo -name breeze-poll -type f 2>/dev/null | head -1)
+[ -z "$BREEZE_POLL" ] && BREEZE_POLL=$(find ~/breeze -name breeze-poll -type f 2>/dev/null | head -1)
 [ -n "$BREEZE_POLL" ] && bash "$BREEZE_POLL" || echo "Could not find breeze-poll script"
 ```
 
@@ -297,7 +297,7 @@ $STATUS_MGR set <notification-id> human --by "$SESSION_ID" --reason "Requested c
 [actual comment body here]
 
 ---
-_sent via [breeze](https://github.com/agent-team-foundation/breeze-demo) on behalf of @USERNAME_
+_sent via [breeze](https://github.com/agent-team-foundation/breeze) on behalf of @USERNAME_
 ```
 
 The instruction block at the top ensures any agent reading the thread sees the labeling convention before anything else. This is how breeze propagates the protocol to third-party agents without requiring them to install anything.

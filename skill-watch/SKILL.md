@@ -17,7 +17,7 @@ Opens a new terminal window streaming breeze activity with clickable GitHub link
 
 ```bash
 BREEZE_WATCH=$(find ~/.claude/skills -name breeze-watch -path "*/bin/*" -type f 2>/dev/null | head -1)
-[ -z "$BREEZE_WATCH" ] && BREEZE_WATCH=$(find ~/breeze-demo -name breeze-watch -path "*/bin/*" -type f 2>/dev/null | head -1)
+[ -z "$BREEZE_WATCH" ] && BREEZE_WATCH=$(find ~/breeze -name breeze-watch -path "*/bin/*" -type f 2>/dev/null | head -1)
 
 if [ -z "$BREEZE_WATCH" ] || [ ! -x "$BREEZE_WATCH" ]; then
   echo "BREEZE_WATCH_NOT_FOUND"
@@ -26,7 +26,7 @@ else
 fi
 ```
 
-If `BREEZE_WATCH_NOT_FOUND`: Tell the user "breeze-watch script not found. Run `cd ~/breeze-demo && ./setup` first."
+If `BREEZE_WATCH_NOT_FOUND`: Tell the user "breeze-watch script not found. Run `cd ~/breeze && ./setup` first."
 
 Otherwise, open a new terminal window running the watch script:
 

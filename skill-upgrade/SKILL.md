@@ -15,8 +15,8 @@ Update breeze to the latest version.
 ```bash
 # Find breeze repo location
 BREEZE_REPO=""
-if [ -d ~/breeze-demo/.git ]; then
-  BREEZE_REPO=~/breeze-demo
+if [ -d ~/breeze/.git ]; then
+  BREEZE_REPO=~/breeze
 elif [ -L ~/.claude/skills/breeze ]; then
   BREEZE_REPO=$(readlink ~/.claude/skills/breeze | sed 's|/skill$||')
   [ -d "$BREEZE_REPO/.git" ] || BREEZE_REPO=""
@@ -38,7 +38,7 @@ else
 fi
 ```
 
-If `NOT_FOUND`: Tell the user "Could not find breeze repo. Run `git clone https://github.com/agent-team-foundation/breeze-demo.git ~/breeze-demo && cd ~/breeze-demo && ./setup`"
+If `NOT_FOUND`: Tell the user "Could not find breeze repo. Run `git clone https://github.com/agent-team-foundation/breeze.git ~/breeze && cd ~/breeze && ./setup`"
 
 If `ALREADY_UP_TO_DATE`: Tell the user "breeze is already up to date."
 
