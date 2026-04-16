@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # breeze-status — statusline output based on GitHub labels (breeze_status field)
-# Only counts "new" notifications in the statusline
+# Shows human count first (most urgent), then new items broken down by type
 set -euo pipefail
 
 BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
@@ -27,16 +27,23 @@ if [ "$FILE_AGE" -gt 600 ]; then
   exit 0
 fi
 
-# Count new notifications from breeze_status field
+# Counts
 CURRENT_POLL=$(jq -r '.last_poll' "$INBOX" 2>/dev/null || echo "")
+NEW_COUNT=$(jq '[.notifications[] | select(.breeze_status == "new")] | length' "$INBOX" 2>/dev/null || echo "0")
+HUMAN_COUNT=$(jq '[.notifications[] | select(.breeze_status == "human")] | length' "$INBOX" 2>/dev/null || echo "0")
 
-SUMMARY=$(jq -r '
+# Build the summary
+# Format: [🔴 N human ·] X PRs · Y issues · Z discussions
+HUMAN_PART=""
+if [ "$HUMAN_COUNT" -gt 0 ]; then
+  HUMAN_PART="🔴 ${HUMAN_COUNT} human · "
+fi
+
+NEW_SUMMARY=$(jq -r '
   [.notifications[] | select(.breeze_status == "new")]
   | if length == 0 then ""
     else
-      . as $items |
-      ($items | length) as $total |
-      ($items | group_by(.type)
+      group_by(.type)
       | map({type: .[0].type, count: length})
       | sort_by(-.count)
       | map(
@@ -48,26 +55,37 @@ SUMMARY=$(jq -r '
           else "\(.count) \(.type)"
           end
         )
-      | "/breeze: " + join(" · "))
+      | join(" · ")
     end
 ' "$INBOX" 2>/dev/null)
 
-NEW_COUNT=$(jq '[.notifications[] | select(.breeze_status == "new")] | length' "$INBOX" 2>/dev/null || echo "0")
+# Assemble: if both human and new exist, show both. If only human, show human.
+SUMMARY=""
+if [ -n "$HUMAN_PART" ] || [ -n "$NEW_SUMMARY" ]; then
+  SUMMARY="/breeze: ${HUMAN_PART}${NEW_SUMMARY}"
+fi
 
-# Bell logic: ring once per new poll that increased the new count
+# Bell logic: ring when human count increases OR new count increases
 NEW_SUFFIX=""
 if [ -f "$BELL_STATE" ]; then
   PREV_POLL=$(cut -d' ' -f1 "$BELL_STATE" 2>/dev/null || echo "")
-  PREV_COUNT=$(cut -d' ' -f2 "$BELL_STATE" 2>/dev/null || echo "0")
+  PREV_NEW=$(cut -d' ' -f2 "$BELL_STATE" 2>/dev/null || echo "0")
+  PREV_HUMAN=$(cut -d' ' -f3 "$BELL_STATE" 2>/dev/null || echo "0")
 
-  if [ "$CURRENT_POLL" != "$PREV_POLL" ] && [ "$NEW_COUNT" -gt "$PREV_COUNT" ]; then
-    NEW_DIFF=$(( NEW_COUNT - PREV_COUNT ))
-    NEW_SUFFIX=" (+$NEW_DIFF new)"
-    printf '\a'
+  if [ "$CURRENT_POLL" != "$PREV_POLL" ]; then
+    if [ "$HUMAN_COUNT" -gt "$PREV_HUMAN" ]; then
+      HUMAN_DIFF=$(( HUMAN_COUNT - PREV_HUMAN ))
+      NEW_SUFFIX=" (+$HUMAN_DIFF needs you)"
+      printf '\a'
+    elif [ "$NEW_COUNT" -gt "$PREV_NEW" ]; then
+      NEW_DIFF=$(( NEW_COUNT - PREV_NEW ))
+      NEW_SUFFIX=" (+$NEW_DIFF new)"
+      printf '\a'
+    fi
   fi
 fi
 
-echo "$CURRENT_POLL $NEW_COUNT" > "$BELL_STATE"
+echo "$CURRENT_POLL $NEW_COUNT $HUMAN_COUNT" > "$BELL_STATE"
 
 if [ -n "$SUMMARY" ]; then
   echo "${SUMMARY}${NEW_SUFFIX}"

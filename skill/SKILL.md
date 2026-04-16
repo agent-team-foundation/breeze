@@ -94,25 +94,47 @@ Then present the dashboard using **aggressive markdown formatting** for readabil
 
 ### Formatting rules
 
-1. **Status bar** at the top with emoji markers and type breakdown:
+1. **Status bar** at the top with emoji markers. Human count leads when > 0:
    ```
-   **breeze** | :red_circle: 15 new (10 PRs · 5 issues) · :wrench: 3 wip · :raising_hand: 2 human · :white_check_mark: 50 done
+   **breeze** | :red_circle: 2 human · :large_orange_diamond: 15 new (10 PRs · 5 issues) · :large_blue_diamond: 3 wip · :white_check_mark: 50 done
    ```
 
-2. **Group by repo** using `###` headers. Use **short repo names** (drop the owner prefix unless ambiguous).
+2. **Needs you section FIRST** (before repo groups), always shown even when empty. This is the most important part of the dashboard — items where the user is blocking:
+   ```markdown
+   ## :red_circle: Needs you (2)
 
-3. **Use a compact table** per repo for items. Columns: `#`, type icon, title (as clickable link), reason tag.
-   - Type icons: PR = `^` (merge arrow), Issue = `!`, Discussion = `?`
+   | # | Repo | Title | Why |
+   |---|------|-------|-----|
+   | 1 | paperclip | [BLOCKED: SocialData API exhausted](...) | msg |
+   | 2 | paperclip-tree | [sync: codex improve UI](...) | _yours_ |
+   ```
+
+   When zero, show:
+   ```markdown
+   ## :white_check_mark: Needs you (0) — nothing blocking you right now
+   ```
+
+3. **Group remaining items by repo** using `###` headers. Only show repos that have new/wip items (skip repos that are only `done`).
+
+4. **Use a compact table** per repo for items. Columns: `#`, type icon, title (as clickable link), reason tag.
+   - Type icons: PR = `^`, Issue = `!`, Discussion = `?`
    - Reason tags: `review_requested` → **review**, `author` → _yours_, `mention` → @you, `comment` → msg, `participating` → joined, `subscribed` → watching
 
-4. **Collapse low-priority items**: If a repo has >10 items, show the top 5 (by priority: review_requested > mention > author > comment > others) and add a "... and N more" line. The user can say "show all paperclip" to expand.
+5. **Collapse low-priority items**: If a repo has >10 items, show the top 5 and add a "... and N more" line.
 
-5. **Keep it tight**: No blank lines between table rows. No full URLs on separate lines — make the title itself the link using `[title](url)` markdown.
+6. **Keep it tight**: No blank lines between table rows. Title = clickable link.
 
 Example output:
 
 ```markdown
-**breeze** | :red_circle: 15 new (10 PRs · 5 issues) · :wrench: 3 wip · :raising_hand: 2 human · :white_check_mark: 50 done
+**breeze** | :red_circle: 2 human · :large_orange_diamond: 15 new (10 PRs · 5 issues) · :large_blue_diamond: 3 wip · :white_check_mark: 50 done
+
+## :red_circle: Needs you (2)
+
+| # | Repo | Title | Why |
+|---|------|-------|-----|
+| 1 | paperclip | [BLOCKED: SocialData API exhausted](https://github.com/paperclipai/paperclip/issues/3701) | msg |
+| 2 | paperclip-tree | [sync: codex improve UI](https://github.com/serenakeyitan/paperclip-tree/pull/299) | _yours_ |
 
 ### paperclip (10)
 
