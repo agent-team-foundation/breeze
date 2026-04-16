@@ -1,4 +1,5 @@
 mod broker;
+mod classify;
 mod config;
 mod gh;
 mod gh_executor;
