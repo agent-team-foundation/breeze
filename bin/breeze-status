@@ -31,12 +31,20 @@ fi
 CURRENT_POLL=$(jq -r '.last_poll' "$INBOX" 2>/dev/null || echo "")
 NEW_COUNT=$(jq '[.notifications[] | select(.breeze_status == "new")] | length' "$INBOX" 2>/dev/null || echo "0")
 HUMAN_COUNT=$(jq '[.notifications[] | select(.breeze_status == "human")] | length' "$INBOX" 2>/dev/null || echo "0")
+# @you count = new notifications where you are mentioned OR review is requested OR you're assigned.
+# Distinct from HUMAN_COUNT (agent-escalated via breeze:human label) — this captures the everyday
+# "someone expects a response from me" signal that would otherwise hide inside NEW_COUNT.
+MENTION_COUNT=$(jq '[.notifications[] | select(.breeze_status == "new") | select(.reason == "mention" or .reason == "review_requested" or .reason == "assign")] | length' "$INBOX" 2>/dev/null || echo "0")
 
-# Build the summary (Option B: needs-you on the left, pulse on the right)
-# Format: [⚠ N need you ·] X PRs · Y issues · Z discussions
+# Build the summary.
+# Format: ⚠ N need-you · 👤 M @you · X PRs · Y issues · Z discussions
 HUMAN_PART=""
 if [ "$HUMAN_COUNT" -gt 0 ]; then
   HUMAN_PART="⚠ ${HUMAN_COUNT} need you · "
+fi
+MENTION_PART=""
+if [ "$MENTION_COUNT" -gt 0 ]; then
+  MENTION_PART="👤 ${MENTION_COUNT} @you · "
 fi
 
 NEW_SUMMARY=$(jq -r '
@@ -59,10 +67,10 @@ NEW_SUMMARY=$(jq -r '
     end
 ' "$INBOX" 2>/dev/null)
 
-# Assemble: if both human and new exist, show both. If only human, show human.
+# Assemble: if any of {human, mentions, new-summary} is non-empty, render the line.
 SUMMARY=""
-if [ -n "$HUMAN_PART" ] || [ -n "$NEW_SUMMARY" ]; then
-  SUMMARY="/breeze: ${HUMAN_PART}${NEW_SUMMARY}"
+if [ -n "$HUMAN_PART" ] || [ -n "$MENTION_PART" ] || [ -n "$NEW_SUMMARY" ]; then
+  SUMMARY="/breeze: ${HUMAN_PART}${MENTION_PART}${NEW_SUMMARY}"
 fi
 
 # Bell logic: ring when human count increases OR new count increases
