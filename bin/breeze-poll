@@ -43,10 +43,21 @@ fi
 # Read config — extract repos list only (stop at next top-level key)
 REPOS_FILTER=""
 if [ -f "$CONFIG" ]; then
-  REPOS=$(awk '/^repos:/{found=1; next} found && /^[a-z]/{exit} found && /^\s*-/{gsub(/^\s*-\s*/, ""); print}' "$CONFIG" | head -50)
+  REPOS=$(awk '/^repos:/{found=1; next} found && /^[a-z]/{exit} found && /^[ \t]*-/{gsub(/^[ \t]*-[ \t]*/, ""); print}' "$CONFIG" | head -50)
   if [ -n "$REPOS" ] && [ "$REPOS" != "all" ]; then
     REPOS_FILTER="$REPOS"
   fi
+fi
+
+# label_scan_repos — explicit list of repos where breeze should surface
+# breeze:human-labeled items even when no GitHub notification fires.
+# Motivation: agent-posted breeze:human labels don't notify the user (the user
+# is the author of the label-adding action), so the item never hits the
+# notifications inbox and never shows up in ⚠ need-you. This step scans each
+# listed repo's open items directly and injects synthetic inbox entries.
+LABEL_SCAN_REPOS=""
+if [ -f "$CONFIG" ]; then
+  LABEL_SCAN_REPOS=$(awk '/^label_scan_repos:/{found=1; next} found && /^[a-z]/{exit} found && /^[ \t]*-/{gsub(/^[ \t]*-[ \t]*/, ""); print}' "$CONFIG" | head -50)
 fi
 
 # Step 1: Fetch raw notifications to a temp file (avoids shell quoting issues)
@@ -209,6 +220,70 @@ jq --slurpfile labels "$LABEL_MAP" '
   ]
 ' "$BREEZE_DIR/.enriched.json" > "$BREEZE_DIR/.enriched_final.json"
 mv "$BREEZE_DIR/.enriched_final.json" "$BREEZE_DIR/.enriched.json"
+
+# Step 5b: Inject synthetic entries for breeze:human-labeled items in
+# label_scan_repos that aren't already in the inbox. A real GitHub
+# notification for the same item would have arrived via steps 1-5 with
+# breeze_status=human already; this only adds the *missing* ones.
+if [ -n "$LABEL_SCAN_REPOS" ]; then
+  SYNTH_FILE="$BREEZE_DIR/.synth_human.json"
+  echo '[]' > "$SYNTH_FILE"
+
+  # Existing (repo, number) pairs — used as a dedup set.
+  EXISTING_KEYS=$(jq -r '.[] | select(.number != null) | "\(.repo)#\(.number)"' "$BREEZE_DIR/.enriched.json" 2>/dev/null)
+
+  while IFS= read -r REPO; do
+    [ -z "$REPO" ] && continue
+
+    # Fetch issues + PRs with breeze:human label.
+    ISSUES=$(gh issue list --repo "$REPO" --state open --label "breeze:human" --limit 50 \
+      --json number,title,url,updatedAt 2>/dev/null || echo "[]")
+    PRS=$(gh pr list --repo "$REPO" --state open --label "breeze:human" --limit 50 \
+      --json number,title,url,updatedAt 2>/dev/null || echo "[]")
+
+    # Build synthetic entries, dropping any (repo, number) already in
+    # EXISTING_KEYS so we don't double-count.
+    echo "$ISSUES" "$PRS" | jq -s \
+      --arg repo "$REPO" \
+      --arg existing "$EXISTING_KEYS" \
+      '
+      # $existing is a newline-joined string like "owner/name#42\nowner/name#99"
+      ($existing | split("\n") | map(select(. != ""))) as $ex
+      | (.[0] // []) as $issues
+      | (.[1] // []) as $prs
+      | (
+          ($issues | map(. + {type: "Issue"})) +
+          ($prs    | map(. + {type: "PullRequest"}))
+        )
+      | map(select(($repo + "#" + (.number | tostring)) | in($ex | map({(.): true}) | add // {}) | not))
+      | map({
+          id: ("synth-human-" + $repo + "-" + (.number | tostring)),
+          type: .type,
+          reason: "label_scan",
+          repo: $repo,
+          title: .title,
+          url: .url,
+          last_actor: .url,
+          updated_at: .updatedAt,
+          unread: true,
+          priority: 1,
+          number: .number,
+          html_url: .url,
+          gh_state: "OPEN",
+          labels: ["breeze:human"],
+          breeze_status: "human"
+        })
+      ' > "$BREEZE_DIR/.synth_repo.json" 2>/dev/null || echo '[]' > "$BREEZE_DIR/.synth_repo.json"
+
+    jq -s '.[0] + .[1]' "$SYNTH_FILE" "$BREEZE_DIR/.synth_repo.json" > "$BREEZE_DIR/.synth_merged.json"
+    mv "$BREEZE_DIR/.synth_merged.json" "$SYNTH_FILE"
+  done <<< "$LABEL_SCAN_REPOS"
+
+  # Merge synthetics onto the enriched notifications array.
+  jq -s '.[0] + .[1]' "$BREEZE_DIR/.enriched.json" "$SYNTH_FILE" > "$BREEZE_DIR/.enriched_with_synth.json"
+  mv "$BREEZE_DIR/.enriched_with_synth.json" "$BREEZE_DIR/.enriched.json"
+  rm -f "$SYNTH_FILE" "$BREEZE_DIR/.synth_repo.json"
+fi
 
 # Step 6: Detect new notifications (diff old vs new inbox)
 LOG_FILE="$BREEZE_DIR/activity.log"

@@ -101,6 +101,12 @@ repos:
   - all                    # or list specific repos: owner/repo1, owner/repo2
 poll_interval: 60          # seconds between polls
 footer: true               # append "sent via breeze" to comments
+
+# Optional: surface `breeze:human`-labeled items in these repos even when no
+# GitHub notification fires. Useful when agents self-apply the label on items
+# the user authored (GitHub never notifies the author of their own thread).
+label_scan_repos:
+  - serenakeyitan/git-bee
 ```
 
 ## How it works
